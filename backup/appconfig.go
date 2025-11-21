@@ -19,7 +19,7 @@ func NewAppConfig() (*AppConfig, error) {
 	flag.StringVar(&appConfig.DatabaseName, "db", "", "The Cloudant database name to backup")
 	flag.StringVar(&appConfig.DatabaseName, "d", "", "The Cloudant database name to backup")
 	flag.IntVar(&appConfig.Parallelism, "parallelism", 5, "The number of HTTP requests to perform in parallel when performing a backup")
-	flag.IntVar(&appConfig.Parallelism, "p", 1, "The number of HTTP requests to perform in parallel when performing a backup")
+	flag.IntVar(&appConfig.Parallelism, "p", 5, "The number of HTTP requests to perform in parallel when performing a backup")
 	flag.Parse()
 
 	// if we don't have a database name after parsing
