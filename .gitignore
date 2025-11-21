@@ -1,0 +1,6 @@
+cloudantbackup
+*.jsonl
+*.json
+*.txt
+*.log
+run.sh
