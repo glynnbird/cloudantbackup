@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
-	"github.com/IBM/cloudant-go-sdk/features"
 )
 
 const bufferSize int = 500
@@ -71,13 +71,6 @@ func New() (*CloudantBackup, error) {
 
 func (cb *CloudantBackup) Run() error {
 
-	// build up the request parameters, including "since" if we know it from a
-	// previous run
-	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince("0")
-	postChangesOptions.SetIncludeDocs(false)
-	postChangesOptions.SetSeqInterval(500)
-
 	// Start worker pool
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
@@ -88,32 +81,47 @@ func (cb *CloudantBackup) Run() error {
 	cb.wgCollector.Add(1)
 	go cb.statsCollector()
 
-	// create a new changes follower
-	follower, err := features.NewChangesFollower(cb.service, postChangesOptions)
+	// create a changes feed request
+	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
+	postChangesOptions.SetSince("0")
+	postChangesOptions.SetIncludeDocs(false)
+	postChangesOptions.SetSeqInterval(500)
+	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
 	if err != nil {
 		return err
 	}
 
-	// start the follower, in one-off mode
-	changesCh, err := follower.StartOneOff()
-	if err != nil {
-		return err
-	}
+	// scan through the changes feed line by line
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		// fetch a line
+		line := scanner.Text()
 
-	// run through each change
-	for changesItem := range changesCh {
-		item, err := changesItem.Item()
-		if err != nil {
-			return err
-		}
-		cb.buffer[cb.bufferLen] = *item.ID
-		cb.bufferLen++
-		if cb.bufferLen == bufferSize {
-			clone := make([]string, cb.bufferLen)
-			copy(clone, cb.buffer[:cb.bufferLen])
-			cb.jobsChan <- clone
-			cb.changesCount += cb.bufferLen
-			cb.bufferLen = 0
+		// changes look like this: { ... }, ignore anything else
+		if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
+			// strip off the ,
+			line := line[:len(line)-1]
+
+			// parse as JSON
+			var obj map[string]interface{}
+			err = json.Unmarshal([]byte(line), &obj)
+			if err != nil {
+				continue
+			}
+
+			// extract the id
+			id := fmt.Sprintf("%v", obj["id"])
+			cb.buffer[cb.bufferLen] = id
+			cb.bufferLen++
+
+			// if we have a batch
+			if cb.bufferLen == bufferSize {
+				clone := make([]string, cb.bufferLen)
+				copy(clone, cb.buffer[:cb.bufferLen])
+				cb.jobsChan <- clone
+				cb.changesCount += cb.bufferLen
+				cb.bufferLen = 0
+			}
 		}
 	}
 
