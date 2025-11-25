@@ -12,8 +12,6 @@ import (
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 )
 
-const bufferSize int = 500
-
 type ResultSet struct {
 	result   string
 	docCount int
@@ -50,7 +48,7 @@ func New() (*CloudantBackup, error) {
 	service.SetDefaultHeaders(header)
 
 	// create the buffer
-	buffer := make([]string, bufferSize)
+	buffer := make([]string, appConfig.BufferSize)
 
 	// create struct
 	cb := CloudantBackup{
@@ -115,7 +113,7 @@ func (cb *CloudantBackup) Run() error {
 			cb.bufferLen++
 
 			// if we have a batch
-			if cb.bufferLen == bufferSize {
+			if cb.bufferLen == cb.appConfig.BufferSize {
 				clone := make([]string, cb.bufferLen)
 				copy(clone, cb.buffer[:cb.bufferLen])
 				cb.jobsChan <- clone
@@ -155,7 +153,9 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			docs[i].ID = &job[i]
 		}
 		postBulkGetOptions := cb.service.NewPostBulkGetOptions(cb.appConfig.DatabaseName, docs)
-		postBulkGetOptions.SetRevs(true)
+		if cb.appConfig.Mode == ModeFull {
+			postBulkGetOptions.SetRevs(true)
+		}
 		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
 		if err != nil {
 			cb.errorsChan <- err
@@ -194,7 +194,8 @@ func (cb *CloudantBackup) statsCollector() {
 	total := 0
 
 	// header line
-	fmt.Println(`{"name":"@cloudant/couchbackup","version":"2.9.10","mode":"full"}`)
+	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"2.9.10","mode":"%v"}`, cb.appConfig.Mode)
+	fmt.Println("")
 
 	for {
 		select {
