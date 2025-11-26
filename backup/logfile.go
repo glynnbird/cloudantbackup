@@ -23,8 +23,8 @@ func NewLogFile(filename string) (*LogFile, error) {
 	return &lf, nil
 }
 
-func (lf *LogFile) WriteNewBatch(batchId int, batch string) error {
-	_, err := fmt.Fprintf(lf.handle, ":t batch%d %s\n", batchId, batch) //.Fprintln(lf.handle, line)
+func (lf *LogFile) WriteNewBatch(batch *Batch) error {
+	_, err := fmt.Fprintf(lf.handle, ":t batch%v %v\n", batch.batchId, batch.ToLogString())
 	return err
 }
 

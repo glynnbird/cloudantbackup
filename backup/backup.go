@@ -36,6 +36,7 @@ type CloudantBackup struct {
 }
 
 func New() (*CloudantBackup, error) {
+
 	// load the CLI parameters
 	appConfig, err := NewAppConfig()
 	if err != nil {
@@ -85,6 +86,14 @@ func New() (*CloudantBackup, error) {
 
 func (cb *CloudantBackup) Run() error {
 
+	// don't forget to close the log file
+	defer func() {
+		// close the log file
+		if cb.logFile != nil {
+			cb.logFile.Close()
+		}
+	}()
+
 	// Start worker pool
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
@@ -117,25 +126,35 @@ func (cb *CloudantBackup) Run() error {
 			line := line[:len(line)-1]
 
 			// parse as JSON
-			var obj map[string]interface{}
-			err = json.Unmarshal([]byte(line), &obj)
+			//var obj map[string]interface{}
+			change := cloudantv1.ChangesResultItem{}
+			err = json.Unmarshal([]byte(line), &change)
 			if err != nil {
 				continue
 			}
 
-			// extract the id
-			id := fmt.Sprintf("%v", obj["id"])
-			cb.buffer[cb.bufferLen] = id
+			// add the id to ur buffer
+			cb.buffer[cb.bufferLen] = *change.ID
 			cb.bufferLen++
 
 			// if we have a batch
 			if cb.bufferLen == cb.appConfig.BufferSize {
-				batch := NewBatch(cb.batchId, make([]string, cb.bufferLen))
-				copy(batch.buffer, cb.buffer[:cb.bufferLen])
+				// clone the batch to avoid data being overwritten
+				clone := make([]string, cb.bufferLen)
+				copy(clone, cb.buffer[:cb.bufferLen])
+
+				// create a neew batch
+				batch := NewBatch(cb.batchId, clone)
+
+				// log it
 				if cb.logFile != nil {
-					cb.logFile.WriteNewBatch(cb.batchId, batch.ToLogString())
+					cb.logFile.WriteNewBatch(batch)
 				}
+
+				// send it to a worker via the jobsChan
 				cb.jobsChan <- *batch
+
+				// update counters
 				cb.batchId++
 				cb.changesCount += cb.bufferLen
 				cb.bufferLen = 0
@@ -145,29 +164,35 @@ func (cb *CloudantBackup) Run() error {
 
 	// process last batch
 	if cb.bufferLen > 0 {
+		// create last batch
 		cb.changesCount += cb.bufferLen
 		batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
+
+		// log it
 		if cb.logFile != nil {
-			cb.logFile.WriteNewBatch(cb.batchId, batch.ToLogString())
+			cb.logFile.WriteNewBatch(batch)
 		}
+
+		// send it to a worker via the jobsChan
 		cb.jobsChan <- *batch
 	}
+
+	// we're now finished consuming the changes feed
 	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
 	if cb.logFile != nil {
 		cb.logFile.ChangesComplete()
 	}
+
+	// so we can close the jobsChan which will kill the workers in time
 	close(cb.jobsChan)
 
-	// wait for the in-flight goroutines to complete
+	// wait for the in-flight worker goroutines to complete
 	cb.wgWorker.Wait()
+
+	// wait for the collector to finish
 	close(cb.resultsChan)
 	close(cb.errorsChan)
 	cb.wgCollector.Wait()
-
-	// close the log file
-	if cb.logFile != nil {
-		cb.logFile.Close()
-	}
 
 	return nil
 }
@@ -175,9 +200,10 @@ func (cb *CloudantBackup) Run() error {
 // fetchDocsWorker fetches batches of document ids from the jobsChan. It writes the number of document ids
 // fetched back to the resultsChan and any errors to errorsChan
 func (cb *CloudantBackup) fetchDocsWorker() {
-	// make sure we release our slot
+	// make sure we release our slot in the WaitGroup
 	defer cb.wgWorker.Done()
 
+	// wait for a job (a Batch struct) from the jobsChan
 	for job := range cb.jobsChan {
 		// formulate bulk docs request
 		postBulkGetOptions := cb.service.NewPostBulkGetOptions(cb.appConfig.DatabaseName, job.docs)
@@ -200,15 +226,15 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			}
 		}
 
-		// send results back to resultsChan as ResultsSet containing a JSON string
+		// send results back to resultsChan as a ResultsSet containing a JSON string
 		// and a count of the documents
-		jsonBytes, err := json.Marshal(backupDocs)
+		b, err := json.Marshal(backupDocs)
 		if err != nil {
 			cb.errorsChan <- err
 			return
 		}
 		rs := ResultSet{
-			result:   string(jsonBytes),
+			result:   string(b),
 			docCount: docCount,
 			batchId:  job.batchId,
 		}
@@ -223,7 +249,7 @@ func (cb *CloudantBackup) statsCollector() {
 	total := 0
 
 	// header line
-	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"2.9.10","mode":"%v"}`, cb.appConfig.Mode)
+	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"%v"}`, cb.appConfig.Mode)
 	fmt.Println("")
 
 	for {
@@ -235,17 +261,26 @@ func (cb *CloudantBackup) statsCollector() {
 			if !ok {
 				return
 			}
+
+			// increment docCount
 			total += r.docCount
-			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchId, r.docCount, total)
+
+			// send the output string to stdout
 			fmt.Println(r.result)
+
+			// update the log file
 			if cb.logFile != nil {
 				cb.logFile.WriteDoneBatch(r.batchId)
 			}
+
+			// log the completion of this batch on stderr
+			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchId, r.docCount, total)
 
 		case err, ok := <-cb.errorsChan:
 			if !ok {
 				return
 			}
+			// any error on errorsChan is fatal
 			panic(fmt.Sprintf("ERROR: %v", err))
 		}
 	}
