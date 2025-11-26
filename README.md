@@ -35,6 +35,8 @@ cloudantbackup --db mydb > mydb.txt
 - `--parallelism` - the number of http requests in flight at any one time (default: 5)
 - `--buffer-size` - the number of documents fetched with each bulk read request (default: 500)
 - `--mode` - the backup mode. Either `full` or `shallow`. A `full` backup fetches all the revisions of each document, a `shallow` backup just fetches the winning revision. (default: full)
+- `--log` - the filename where the backup log will be stored (not the backup data itself) (optional)
+- `--resume` - a flag to indicate that a previously incomplete backup should be resumed (`--log` also required) (optional)
 
 e.g.
 
