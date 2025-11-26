@@ -94,6 +94,16 @@ func (cb *CloudantBackup) Run() error {
 		}
 	}()
 
+	// if we are to resume, load the old log file
+	var batchesToResume *[]Batch
+	var err error
+	if cb.appConfig.Resume {
+		batchesToResume, err = cb.logFile.Load(cb.appConfig.BufferSize)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Start worker pool
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
@@ -104,83 +114,100 @@ func (cb *CloudantBackup) Run() error {
 	cb.wgCollector.Add(1)
 	go cb.statsCollector()
 
-	// create a changes feed request
-	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince("0")
-	postChangesOptions.SetIncludeDocs(false)
-	postChangesOptions.SetSeqInterval(500)
-	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
-	if err != nil {
-		return err
-	}
+	// either resume from the batches we found in the file
+	if cb.appConfig.Resume {
+		log.Printf("Resuming: %v batches", len(*batchesToResume))
+		for _, batch := range *batchesToResume {
+			// update the log file
+			cb.logFile.WriteNewBatch(&batch)
 
-	// scan through the changes feed line by line
-	scanner := bufio.NewScanner(stream)
-	for scanner.Scan() {
-		// fetch a line
-		line := scanner.Text()
+			// send it to a worker via the jobsChan
+			cb.jobsChan <- batch
 
-		// changes look like this: { ... }, ignore anything else
-		if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
-			// strip off the ,
-			line := line[:len(line)-1]
+			// update counters
+			cb.changesCount += len(batch.buffer)
+		}
+	} else {
+		// or spool the changes feed
 
-			// parse as JSON
-			//var obj map[string]interface{}
-			change := cloudantv1.ChangesResultItem{}
-			err = json.Unmarshal([]byte(line), &change)
-			if err != nil {
-				continue
-			}
+		// create a changes feed request
+		postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
+		postChangesOptions.SetSince("0")
+		postChangesOptions.SetIncludeDocs(false)
+		postChangesOptions.SetSeqInterval(500)
+		stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
+		if err != nil {
+			return err
+		}
 
-			// add the id to ur buffer
-			cb.buffer[cb.bufferLen] = *change.ID
-			cb.bufferLen++
+		// scan through the changes feed line by line
+		scanner := bufio.NewScanner(stream)
+		for scanner.Scan() {
+			// fetch a line
+			line := scanner.Text()
 
-			// if we have a batch
-			if cb.bufferLen == cb.appConfig.BufferSize {
-				// clone the batch to avoid data being overwritten
-				clone := make([]string, cb.bufferLen)
-				copy(clone, cb.buffer[:cb.bufferLen])
+			// changes look like this: { ... }, ignore anything else
+			if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
+				// strip off the ,
+				line := line[:len(line)-1]
 
-				// create a neew batch
-				batch := NewBatch(cb.batchId, clone)
-
-				// log it
-				if cb.logFile != nil {
-					cb.logFile.WriteNewBatch(batch)
+				// parse as JSON
+				//var obj map[string]interface{}
+				change := cloudantv1.ChangesResultItem{}
+				err = json.Unmarshal([]byte(line), &change)
+				if err != nil {
+					continue
 				}
 
-				// send it to a worker via the jobsChan
-				cb.jobsChan <- *batch
+				// add the id to ur buffer
+				cb.buffer[cb.bufferLen] = *change.ID
+				cb.bufferLen++
 
-				// update counters
-				cb.batchId++
-				cb.changesCount += cb.bufferLen
-				cb.bufferLen = 0
+				// if we have a batch
+				if cb.bufferLen == cb.appConfig.BufferSize {
+					// clone the batch to avoid data being overwritten
+					clone := make([]string, cb.bufferLen)
+					copy(clone, cb.buffer[:cb.bufferLen])
+
+					// create a neew batch
+					batch := NewBatch(cb.batchId, clone)
+
+					// log it
+					if cb.logFile != nil {
+						cb.logFile.WriteNewBatch(batch)
+					}
+
+					// send it to a worker via the jobsChan
+					cb.jobsChan <- *batch
+
+					// update counters
+					cb.batchId++
+					cb.changesCount += cb.bufferLen
+					cb.bufferLen = 0
+				}
 			}
 		}
-	}
 
-	// process last batch
-	if cb.bufferLen > 0 {
-		// create last batch
-		cb.changesCount += cb.bufferLen
-		batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
+		// process last batch
+		if cb.bufferLen > 0 {
+			// create last batch
+			cb.changesCount += cb.bufferLen
+			batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
 
-		// log it
-		if cb.logFile != nil {
-			cb.logFile.WriteNewBatch(batch)
+			// log it
+			if cb.logFile != nil {
+				cb.logFile.WriteNewBatch(batch)
+			}
+
+			// send it to a worker via the jobsChan
+			cb.jobsChan <- *batch
 		}
 
-		// send it to a worker via the jobsChan
-		cb.jobsChan <- *batch
-	}
-
-	// we're now finished consuming the changes feed
-	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
-	if cb.logFile != nil {
-		cb.logFile.ChangesComplete()
+		// we're now finished consuming the changes feed
+		log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
+		if cb.logFile != nil {
+			cb.logFile.ChangesComplete()
+		}
 	}
 
 	// so we can close the jobsChan which will kill the workers in time
