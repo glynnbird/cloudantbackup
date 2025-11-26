@@ -11,38 +11,34 @@ type LogFile struct {
 
 func NewLogFile(filename string) (*LogFile, error) {
 	// open the log file
-	logFileHandle, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE, 0644)
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
 
 	// create LogFile struct
 	lf := LogFile{
-		handle: logFileHandle,
+		handle: f,
 	}
 	return &lf, nil
 }
 
 func (lf *LogFile) WriteNewBatch(batchId int, batch string) error {
-	line := fmt.Sprintf(":t batch%d %s\n", batchId, batch)
-	_, err := lf.handle.WriteString(line)
-	if err != nil {
-		return err
-	}
-	return nil
+	_, err := fmt.Fprintf(lf.handle, ":t batch%d %s\n", batchId, batch) //.Fprintln(lf.handle, line)
+	return err
 }
 
 func (lf *LogFile) WriteDoneBatch(batchId int) error {
-	line := fmt.Sprintf(":d batch%d\n", batchId)
-	_, err := lf.handle.WriteString(line)
+	_, err := fmt.Fprintf(lf.handle, ":d batch%d\n", batchId)
 	return err
 }
 
 func (lf *LogFile) ChangesComplete() error {
-	_, err := lf.handle.WriteString(":changes_complete\n")
+	_, err := fmt.Fprintf(lf.handle, ":changes_complete\n")
 	return err
 }
 
 func (lf *LogFile) Close() {
 	lf.handle.Close()
+	lf.handle = nil
 }
