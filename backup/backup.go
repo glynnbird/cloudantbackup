@@ -21,7 +21,7 @@ type ResultSet struct {
 
 // CloudantBackup is the state that represents a backup process.
 type CloudantBackup struct {
-	appConfig    *AppConfig
+	appConfig    *AppConfig             // the command-line options
 	service      *cloudantv1.CloudantV1 // the Cloudant SDK client
 	buffer       []string               // a batch of document ids to fetch
 	bufferLen    int                    // the current position in the buffer
@@ -35,6 +35,8 @@ type CloudantBackup struct {
 	batchId      int                    // the current batch id
 }
 
+// New creates a new CloudantBackup struct which stores the state of backup, the channels,
+// the log file and Cloudant service. A helper function Run actually executes the backup.
 func New() (*CloudantBackup, error) {
 
 	// load the CLI parameters
@@ -84,6 +86,95 @@ func New() (*CloudantBackup, error) {
 	return &cb, nil
 }
 
+// SpoolChangesFeed consumes the Cloudant changes feed, extracting batches of
+// document ids that are to be fetched later. These are put into a Batch struct
+// and sent to an available worker using the jobsChan.
+func (cb *CloudantBackup) SpoolChangesFeed() error {
+
+	// create a changes feed request
+	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
+	postChangesOptions.SetSince("0")
+	postChangesOptions.SetIncludeDocs(false)
+	postChangesOptions.SetSeqInterval(500)
+	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
+	if err != nil {
+		return err
+	}
+
+	// scan through the changes feed line by line
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		// fetch a line
+		line := scanner.Text()
+
+		// changes look like this: { ... }, ignore anything else
+		if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
+			// strip off the ,
+			line := line[:len(line)-1]
+
+			// parse as JSON
+			change := cloudantv1.ChangesResultItem{}
+			err = json.Unmarshal([]byte(line), &change)
+			if err != nil {
+				continue
+			}
+
+			// add the id to ur buffer
+			cb.buffer[cb.bufferLen] = *change.ID
+			cb.bufferLen++
+
+			// if we have a batch
+			if cb.bufferLen == cb.appConfig.BufferSize {
+				// clone the batch to avoid data being overwritten
+				clone := make([]string, cb.bufferLen)
+				copy(clone, cb.buffer[:cb.bufferLen])
+
+				// create a neew batch
+				batch := NewBatch(cb.batchId, clone)
+
+				// log it
+				if cb.logFile != nil {
+					cb.logFile.WriteNewBatch(batch)
+				}
+
+				// send it to a worker via the jobsChan
+				cb.jobsChan <- *batch
+
+				// update counters
+				cb.batchId++
+				cb.changesCount += cb.bufferLen
+				cb.bufferLen = 0
+			}
+		}
+	}
+
+	// process last batch
+	if cb.bufferLen > 0 {
+		// create last batch
+		cb.changesCount += cb.bufferLen
+		batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
+
+		// log it
+		if cb.logFile != nil {
+			cb.logFile.WriteNewBatch(batch)
+		}
+
+		// send it to a worker via the jobsChan
+		cb.jobsChan <- *batch
+	}
+
+	// we're now finished consuming the changes feed
+	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
+	if cb.logFile != nil {
+		cb.logFile.ChangesComplete()
+	}
+	return nil
+}
+
+// Run executes a Cloudant backup. If a backup is to be resumed, the list of batches
+// of document ids to fetch is calculated from a log file, otherwise batches are
+// created by spooling through the changes feed. A set of workers handles the document
+// fetching.
 func (cb *CloudantBackup) Run() error {
 
 	// don't forget to close the log file
@@ -129,84 +220,9 @@ func (cb *CloudantBackup) Run() error {
 		}
 	} else {
 		// or spool the changes feed
-
-		// create a changes feed request
-		postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-		postChangesOptions.SetSince("0")
-		postChangesOptions.SetIncludeDocs(false)
-		postChangesOptions.SetSeqInterval(500)
-		stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
+		err = cb.SpoolChangesFeed()
 		if err != nil {
 			return err
-		}
-
-		// scan through the changes feed line by line
-		scanner := bufio.NewScanner(stream)
-		for scanner.Scan() {
-			// fetch a line
-			line := scanner.Text()
-
-			// changes look like this: { ... }, ignore anything else
-			if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
-				// strip off the ,
-				line := line[:len(line)-1]
-
-				// parse as JSON
-				//var obj map[string]interface{}
-				change := cloudantv1.ChangesResultItem{}
-				err = json.Unmarshal([]byte(line), &change)
-				if err != nil {
-					continue
-				}
-
-				// add the id to ur buffer
-				cb.buffer[cb.bufferLen] = *change.ID
-				cb.bufferLen++
-
-				// if we have a batch
-				if cb.bufferLen == cb.appConfig.BufferSize {
-					// clone the batch to avoid data being overwritten
-					clone := make([]string, cb.bufferLen)
-					copy(clone, cb.buffer[:cb.bufferLen])
-
-					// create a neew batch
-					batch := NewBatch(cb.batchId, clone)
-
-					// log it
-					if cb.logFile != nil {
-						cb.logFile.WriteNewBatch(batch)
-					}
-
-					// send it to a worker via the jobsChan
-					cb.jobsChan <- *batch
-
-					// update counters
-					cb.batchId++
-					cb.changesCount += cb.bufferLen
-					cb.bufferLen = 0
-				}
-			}
-		}
-
-		// process last batch
-		if cb.bufferLen > 0 {
-			// create last batch
-			cb.changesCount += cb.bufferLen
-			batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
-
-			// log it
-			if cb.logFile != nil {
-				cb.logFile.WriteNewBatch(batch)
-			}
-
-			// send it to a worker via the jobsChan
-			cb.jobsChan <- *batch
-		}
-
-		// we're now finished consuming the changes feed
-		log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
-		if cb.logFile != nil {
-			cb.logFile.ChangesComplete()
 		}
 	}
 

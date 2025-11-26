@@ -17,6 +17,7 @@ type Batch struct {
 	docs    []cloudantv1.BulkGetQueryDocument
 }
 
+// NewBatch creates a new batch given its id and an slice of document ids
 func NewBatch(batchId int, buffer []string) *Batch {
 	batch := Batch{
 		batchId: batchId,
@@ -35,7 +36,8 @@ func NewBatch(batchId int, buffer []string) *Batch {
 //	:t batch56 [{"id":"a"},{"id":"b"}]
 //
 // It uses regular expressions to extract the batchId and Unmarshalls the
-// array of objects back into arrays of BulkGetQueryDocument
+// array of objects back into arrays of BulkGetQueryDocument and arrays of
+// document ids
 func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 	// log lines look like this:
 	// :t batch56 [{"id":"a"},{"id":"b"}]

@@ -30,6 +30,7 @@ type AppConfig struct {
 	Resume       bool
 }
 
+// NewAppConfig creates a new AppConfig struct, parsing any command-line parameters
 func NewAppConfig() (*AppConfig, error) {
 	appConfig := AppConfig{}
 
