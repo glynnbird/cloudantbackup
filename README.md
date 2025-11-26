@@ -118,3 +118,6 @@ To remind myself of what's going on, this diagram helps:
 - the goroutines that fetch the batches of documents execute in parallel, allowing the backup to proceed more quickly.
 - the environment variables that configure the Cloudant service are those defined by the IBM Go SDK, not those used by couchbackup.
 - shallow mode simply fetches winning revisions - it isn't a paginated "all docs" as in couchbackup.
+- no `--attachments`
+- no equivalent of couchrestore
+- no tests!
