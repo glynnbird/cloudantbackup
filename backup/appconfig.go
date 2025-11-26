@@ -6,6 +6,7 @@ import (
 	"fmt"
 )
 
+// defaults
 const defaultDatabaseName string = ""
 const defaultParallelism int = 5
 const minParallelism int = 1
@@ -17,6 +18,7 @@ const ModeFull string = "full"
 const ModeShallow string = "shallow"
 const defaultMode string = ModeFull
 const defaultLog string = ""
+const defaultResume bool = false
 
 // AppConfig contains the command-line options chosen by the user
 type AppConfig struct {
@@ -25,6 +27,7 @@ type AppConfig struct {
 	BufferSize   int
 	Mode         string
 	LogFilename  string
+	Resume       bool
 }
 
 func NewAppConfig() (*AppConfig, error) {
@@ -36,6 +39,7 @@ func NewAppConfig() (*AppConfig, error) {
 	flag.IntVar(&appConfig.BufferSize, "buffer-size", defaultBufferSize, "The number of documents fetched per bulk read")
 	flag.StringVar(&appConfig.Mode, "mode", defaultMode, "The backup mode - full or shallow")
 	flag.StringVar(&appConfig.LogFilename, "log", defaultLog, "The name of the log file (optional)")
+	flag.BoolVar(&appConfig.Resume, "resume", defaultResume, "Whether to resume a previously incomplete backup")
 	flag.Parse()
 
 	// if we don't have a database name after parsing
@@ -47,6 +51,8 @@ func NewAppConfig() (*AppConfig, error) {
 		return nil, fmt.Errorf("mode must one of %v and %v", ModeFull, ModeShallow)
 	} else if appConfig.BufferSize < minBufferSize || appConfig.BufferSize > maxBuferSize {
 		return nil, fmt.Errorf("buffer-size must be between %v and %v", minBufferSize, maxBuferSize)
+	} else if appConfig.Resume && appConfig.LogFilename == "" {
+		return nil, fmt.Errorf("--resume must be paired with --log")
 	} else {
 		return &appConfig, nil
 	}
