@@ -6,7 +6,7 @@ import (
 
 func main() {
 
-	// create cloudant snap
+	// create cloudant backup
 	cloudantBackup, err := backup.New()
 	if err != nil {
 		panic(err)
