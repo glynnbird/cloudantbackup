@@ -54,13 +54,14 @@ func (lf *LogFile) WriteDoneBatch(batchId int) error {
 	return err
 }
 
-// ChangesComplete writes a line to the log file to indicate that the changes feed has been
+// WriteChangesComplete writes a line to the log file to indicate that the changes feed has been
 // completely consumed.
-func (lf *LogFile) ChangesComplete() error {
+func (lf *LogFile) WriteChangesComplete() error {
 	_, err := fmt.Fprintf(lf.handle, "%v\n", changesCompletePrefix)
 	return err
 }
 
+// Close closes the writable file handle
 func (lf *LogFile) Close() {
 	lf.handle.Close()
 	lf.handle = nil

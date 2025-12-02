@@ -12,7 +12,7 @@ import (
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 )
 
-// ResultSet is the data sent back from the fetchDocsWorker on the resultsChan
+// ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
 type ResultSet struct {
 	result   string
 	docCount int
@@ -25,13 +25,13 @@ type CloudantBackup struct {
 	service      *cloudantv1.CloudantV1 // the Cloudant SDK client
 	buffer       []string               // a batch of document ids to fetch
 	bufferLen    int                    // the current position in the buffer
-	wgWorker     sync.WaitGroup         // to keep track of running worker goroutines
-	wgCollector  sync.WaitGroup         // to keep track of the results collector
+	wgWorker     sync.WaitGroup         // WaitGroup to keep track of running worker goroutines
+	wgCollector  sync.WaitGroup         // WaitGroup to keep track of the results collector
 	resultsChan  chan ResultSet         // channel to carry results of API calls
 	jobsChan     chan Batch             // channel to carry jobs, which uses the Batch type
 	errorsChan   chan error             // channel to carry errors that occurred when fetching documents from Cloudant
 	changesCount int                    // the total number of changes fetched from the changes follower
-	logFile      *LogFile               // the log file
+	logFile      *LogFile               // the log file, which is optionally written-to during the backup process
 	batchId      int                    // the current batch id
 }
 
@@ -166,7 +166,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	// we're now finished consuming the changes feed
 	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
 	if cb.logFile != nil {
-		cb.logFile.ChangesComplete()
+		cb.logFile.WriteChangesComplete()
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ func (cb *CloudantBackup) Run() error {
 	cb.wgCollector.Add(1)
 	go cb.statsCollector()
 
-	// either resume from the batches we found in the file
+	// We need to either resume from the batches we found in the log file ...
 	if cb.appConfig.Resume {
 		log.Printf("Resuming: %v batches", len(*batchesToResume))
 		for _, batch := range *batchesToResume {
@@ -216,17 +216,17 @@ func (cb *CloudantBackup) Run() error {
 			cb.jobsChan <- batch
 
 			// update counters
-			cb.changesCount += len(batch.buffer)
+			cb.changesCount += len(batch.docs)
 		}
 	} else {
-		// or spool the changes feed
+		// ... or spool the changes feed ...
 		err = cb.SpoolChangesFeed()
 		if err != nil {
 			return err
 		}
 	}
 
-	// so we can close the jobsChan which will kill the workers in time
+	// we can close the jobsChan which will kill the workers in time
 	close(cb.jobsChan)
 
 	// wait for the in-flight worker goroutines to complete
@@ -240,8 +240,8 @@ func (cb *CloudantBackup) Run() error {
 	return nil
 }
 
-// fetchDocsWorker fetches batches of document ids from the jobsChan. It writes the number of document ids
-// fetched back to the resultsChan and any errors to errorsChan
+// fetchDocsWorker is a goroutine that fetches batches of document ids from the jobsChan. It writes a ResultSet
+// back to the resultsChan and any errors to errorsChan
 func (cb *CloudantBackup) fetchDocsWorker() {
 	// make sure we release our slot in the WaitGroup
 	defer cb.wgWorker.Done()
@@ -258,7 +258,7 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			cb.errorsChan <- err
 			return
 		}
-		backupDocs := make([]cloudantv1.Document, 0, len(job.buffer))
+		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
 		docCount := 0
 		for _, result := range bulkGetResult.Results {
 			for _, doc := range result.Docs {
@@ -285,7 +285,7 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 	}
 }
 
-// statsCollector waits for data arriving back on resultsChan and
+// statsCollector is a goroutine that waits for data arriving back on resultsChan or
 // errorsChan, aggregating results and panicking if an error occurs
 func (cb *CloudantBackup) statsCollector() {
 	defer cb.wgCollector.Done()

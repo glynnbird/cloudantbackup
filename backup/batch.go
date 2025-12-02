@@ -9,10 +9,12 @@ import (
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 )
 
-// Batch is a batch of document ids and a id that represents documents that need fetching
-// from Cloudant. The Batch is what it sent to the fetchDocsWorker on the jobsChan
+// Batch is a list of document ids which originate from the changes feed. There is also an "id"
+// which identifies this batch. These are the documents that need fetching from the database. When a
+// new batch is created (either from a slice of ids, or from a log line) the list of ids is converted
+// into a slice of BulkGetQueryDocument structs (docs), which is what is needed by the API call.
+// The Batch is what it sent to the fetchDocsWorker on the jobsChan
 type Batch struct {
-	buffer  []string
 	batchId int
 	docs    []cloudantv1.BulkGetQueryDocument
 }
@@ -21,11 +23,10 @@ type Batch struct {
 func NewBatch(batchId int, buffer []string) *Batch {
 	batch := Batch{
 		batchId: batchId,
-		buffer:  buffer,
 		docs:    make([]cloudantv1.BulkGetQueryDocument, len(buffer)),
 	}
-	for i := range batch.buffer {
-		batch.docs[i].ID = &batch.buffer[i]
+	for i := range buffer {
+		batch.docs[i].ID = &buffer[i]
 	}
 	return &batch
 }
@@ -58,16 +59,9 @@ func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 			return nil, err
 		}
 
-		// recreate the buffer
-		buffer := make([]string, len(docs))
-		for i, v := range docs {
-			buffer[i] = *v.ID
-		}
-
 		// create batch
 		batch := Batch{
 			batchId: batchId,
-			buffer:  buffer,
 			docs:    docs,
 		}
 		return &batch, nil
