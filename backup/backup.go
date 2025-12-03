@@ -86,6 +86,33 @@ func New() (*CloudantBackup, error) {
 	return &cb, nil
 }
 
+// DispatchBatchToWorker creates a new Batch struct and sends it to a
+// worker goroutine by sending the batch to the jobsChan
+func (cb *CloudantBackup) dispatchBatchToWorker() {
+	if cb.bufferLen == 0 {
+		return
+	}
+	// clone the batch to avoid data being overwritten
+	clone := make([]string, cb.bufferLen)
+	copy(clone, cb.buffer[:cb.bufferLen])
+
+	// create a new Batch struct
+	batch := NewBatch(cb.batchId, clone)
+
+	// log it
+	if cb.logFile != nil {
+		cb.logFile.WriteNewBatch(batch)
+	}
+
+	// send it to a worker via the jobsChan
+	cb.jobsChan <- *batch
+
+	// update counters
+	cb.batchId++
+	cb.changesCount += cb.bufferLen
+	cb.bufferLen = 0
+}
+
 // SpoolChangesFeed consumes the Cloudant changes feed, extracting batches of
 // document ids that are to be fetched later. These are put into a Batch struct
 // and sent to an available worker using the jobsChan.
@@ -112,55 +139,29 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 			// strip off the ,
 			line := line[:len(line)-1]
 
-			// parse as JSON
+			// parse as a changes result item
 			change := cloudantv1.ChangesResultItem{}
 			err = json.Unmarshal([]byte(line), &change)
 			if err != nil {
 				continue
 			}
 
-			// add the id to ur buffer
+			// add the id to our buffer
 			cb.buffer[cb.bufferLen] = *change.ID
 			cb.bufferLen++
 
-			// if we have a batch
+			// if we have a full buffer
 			if cb.bufferLen == cb.appConfig.BufferSize {
-				// clone the batch to avoid data being overwritten
-				clone := make([]string, cb.bufferLen)
-				copy(clone, cb.buffer[:cb.bufferLen])
-
-				// create a neew batch
-				batch := NewBatch(cb.batchId, clone)
-
-				// log it
-				if cb.logFile != nil {
-					cb.logFile.WriteNewBatch(batch)
-				}
-
-				// send it to a worker via the jobsChan
-				cb.jobsChan <- *batch
-
-				// update counters
-				cb.batchId++
-				cb.changesCount += cb.bufferLen
-				cb.bufferLen = 0
+				// send the changes to be processed
+				cb.dispatchBatchToWorker()
 			}
 		}
 	}
 
-	// process last batch
+	// if there are still unprocessed changes in the buffer
 	if cb.bufferLen > 0 {
-		// create last batch
-		cb.changesCount += cb.bufferLen
-		batch := NewBatch(cb.batchId, cb.buffer[:cb.bufferLen])
-
-		// log it
-		if cb.logFile != nil {
-			cb.logFile.WriteNewBatch(batch)
-		}
-
-		// send it to a worker via the jobsChan
-		cb.jobsChan <- *batch
+		// send them to be processed
+		cb.dispatchBatchToWorker()
 	}
 
 	// we're now finished consuming the changes feed
