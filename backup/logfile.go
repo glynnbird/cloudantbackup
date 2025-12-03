@@ -74,6 +74,7 @@ func (lf *LogFile) Close() {
 // returned slice are the batches that still need fetching.
 func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 
+	// open the log file for reading
 	rc, err := os.Open(lf.filename)
 	if err != nil {
 		return nil, err
@@ -86,17 +87,28 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 	batches := make([]Batch, 0, 100)
 	doneBatchIds := make([]int, 0, 100)
 	re := regexp.MustCompile(`^\:d batch([0-9]+)$`)
+
+	// for each line in the log file
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// if this is a "to do" line
 		if strings.HasPrefix(line, toDoPrefix) {
+
+			// create a new batch
 			batch, err := NewBatchFromLogLine(line, bufferSize)
 			if err != nil {
 				return nil, err
 			}
+
+			// add it to our slice of batches
 			batches = append(batches, *batch)
 		} else if strings.HasPrefix(line, donePrefix) {
+			// for "done" lines, look for a batch id
 			matches := re.FindStringSubmatch(line)
 			if len(matches) == 2 {
+
+				// add the batch id to our list of done batch ids
 				batchId, err := strconv.Atoi(matches[1])
 				if err != nil {
 					return nil, err
@@ -104,6 +116,7 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 				doneBatchIds = append(doneBatchIds, batchId)
 			}
 		} else if strings.HasPrefix(line, changesCompletePrefix) {
+			// make a note if we see a "changes complete" line - without one, the backup cannot be resumed
 			changesComplete = true
 		}
 	}
@@ -114,10 +127,7 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 	}
 
 	// log the output
-	if len(batches) == len(doneBatchIds) {
-		return nil, errors.New("nothing to resume - backup complete")
-	}
-	if len(batches) < len(doneBatchIds) {
+	if len(batches) <= len(doneBatchIds) {
 		return nil, errors.New("cannot resume - more batches done than exist")
 	}
 
@@ -125,14 +135,17 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 	// that are not in the doneBatchIds slice
 	batchesToDo := make([]Batch, 0, len(batches)-len(doneBatchIds))
 	for _, batch := range batches {
-
+		// only include batches whose id doesn't appear in the doneBatchIds slice
 		if !slices.Contains(doneBatchIds, batch.batchId) {
 			batchesToDo = append(batchesToDo, batch)
 		}
 	}
+
+	// if there are no batches to do, there's no backup to resume
 	if len(batchesToDo) == 0 {
 		return nil, errors.New("cannot resume - all batches done")
 	}
 
+	// return the slice of batches to do
 	return &batchesToDo, nil
 }
