@@ -7,7 +7,7 @@ A backup utility for Cloudant databases.
 You will need to [download and install the Go compiler](https://go.dev/doc/install). Clone this repo then:
 
 ```sh
-go build
+go build ./cmd/cloudantbackup
 ```
 
 Then copy the resultant binary `cloudantbackup` (or `cloudantbackup.exe` in Windows systems) into your path.
