@@ -1,7 +1,10 @@
 package main
 
 import (
-	"github.com/glynnbird/cloudantbackup/backup"
+	"fmt"
+	"os"
+
+	backup "github.com/glynnbird/cloudantbackup/internal/app"
 )
 
 func main() {
@@ -9,12 +12,14 @@ func main() {
 	// create cloudant backup
 	cloudantBackup, err := backup.New()
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	// run it
 	err = cloudantBackup.Run()
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
