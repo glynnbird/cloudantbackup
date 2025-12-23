@@ -257,7 +257,7 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
 		if err != nil {
 			cb.errorsChan <- err
-			return
+			continue
 		}
 		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
 		docCount := 0
