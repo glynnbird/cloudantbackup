@@ -7,18 +7,21 @@ import (
 )
 
 // defaults
-const defaultDatabaseName string = ""
-const defaultParallelism int = 5
-const minParallelism int = 1
-const maxParallelism int = 50
-const defaultBufferSize int = 500
-const minBufferSize int = 1
-const maxBuferSize int = 10000
-const ModeFull string = "full"
-const ModeShallow string = "shallow"
-const defaultMode string = ModeFull
-const defaultLog string = ""
-const defaultResume bool = false
+const (
+	defaultDatabaseName string = ""
+	defaultParallelism  int    = 5
+	minParallelism      int    = 1
+	maxParallelism      int    = 50
+	defaultBufferSize   int    = 500
+	minBufferSize       int    = 1
+	maxBuferSize        int    = 10000
+	ModeFull            string = "full"
+	ModeShallow         string = "shallow"
+	defaultMode         string = ModeFull
+	defaultLog          string = ""
+	defaultResume       bool   = false
+	defaultSince        string = "0"
+)
 
 // AppConfig contains the command-line options chosen by the user
 type AppConfig struct {
@@ -28,6 +31,7 @@ type AppConfig struct {
 	Mode         string
 	LogFilename  string
 	Resume       bool
+	Since        string
 }
 
 // NewAppConfig creates a new AppConfig struct, parsing any command-line parameters
@@ -41,6 +45,7 @@ func NewAppConfig() (*AppConfig, error) {
 	flag.StringVar(&appConfig.Mode, "mode", defaultMode, "The backup mode - full or shallow")
 	flag.StringVar(&appConfig.LogFilename, "log", defaultLog, "The name of the log file (optional)")
 	flag.BoolVar(&appConfig.Resume, "resume", defaultResume, "Whether to resume a previously incomplete backup")
+	flag.StringVar(&appConfig.Since, "since", defaultSince, "Which change to start the backup from (default: '0' - the beginning of time)")
 	flag.Parse()
 
 	// if we don't have a database name after parsing
