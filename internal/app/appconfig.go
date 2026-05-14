@@ -19,6 +19,7 @@ const ModeShallow string = "shallow"
 const defaultMode string = ModeFull
 const defaultLog string = ""
 const defaultResume bool = false
+const defaultSince string = "0"
 
 // AppConfig contains the command-line options chosen by the user
 type AppConfig struct {
@@ -28,6 +29,7 @@ type AppConfig struct {
 	Mode         string
 	LogFilename  string
 	Resume       bool
+	Since        string
 }
 
 // NewAppConfig creates a new AppConfig struct, parsing any command-line parameters
@@ -41,6 +43,7 @@ func NewAppConfig() (*AppConfig, error) {
 	flag.StringVar(&appConfig.Mode, "mode", defaultMode, "The backup mode - full or shallow")
 	flag.StringVar(&appConfig.LogFilename, "log", defaultLog, "The name of the log file (optional)")
 	flag.BoolVar(&appConfig.Resume, "resume", defaultResume, "Whether to resume a previously incomplete backup")
+	flag.StringVar(&appConfig.Since, "since", defaultSince, "Which change to start the backup from (default: '0' - the beginning of time)")
 	flag.Parse()
 
 	// if we don't have a database name after parsing

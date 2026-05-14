@@ -120,7 +120,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 
 	// create a changes feed request
 	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince("0")
+	postChangesOptions.SetSince(cb.appConfig.DatabaseName)
 	postChangesOptions.SetIncludeDocs(false)
 	postChangesOptions.SetSeqInterval(500)
 	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
