@@ -7,19 +7,21 @@ import (
 )
 
 // defaults
-const defaultDatabaseName string = ""
-const defaultParallelism int = 5
-const minParallelism int = 1
-const maxParallelism int = 50
-const defaultBufferSize int = 500
-const minBufferSize int = 1
-const maxBuferSize int = 10000
-const ModeFull string = "full"
-const ModeShallow string = "shallow"
-const defaultMode string = ModeFull
-const defaultLog string = ""
-const defaultResume bool = false
-const defaultSince string = "0"
+const (
+	defaultDatabaseName string = ""
+	defaultParallelism  int    = 5
+	minParallelism      int    = 1
+	maxParallelism      int    = 50
+	defaultBufferSize   int    = 500
+	minBufferSize       int    = 1
+	maxBuferSize        int    = 10000
+	ModeFull            string = "full"
+	ModeShallow         string = "shallow"
+	defaultMode         string = ModeFull
+	defaultLog          string = ""
+	defaultResume       bool   = false
+	defaultSince        string = "0"
+)
 
 // AppConfig contains the command-line options chosen by the user
 type AppConfig struct {

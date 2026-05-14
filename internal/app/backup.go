@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,7 +122,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 
 	// create a changes feed request
 	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince(cb.appConfig.DatabaseName)
+	postChangesOptions.SetSince(cb.appConfig.Since)
 	postChangesOptions.SetIncludeDocs(false)
 	postChangesOptions.SetSeqInterval(500)
 	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
@@ -133,11 +135,15 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	for scanner.Scan() {
 		// fetch a line
 		line := scanner.Text()
-
+		if len(line) == 0 {
+			continue
+		}
 		// changes look like this: { ... }, ignore anything else
-		if len(line) > 0 && line[0] == '{' && line[len(line)-1] == ',' {
+		if line[0] == '{' {
 			// strip off the ,
-			line := line[:len(line)-1]
+			if line[len(line)-1] == ',' {
+				line = line[:len(line)-1]
+			}
 
 			// parse as a changes result item
 			change := cloudantv1.ChangesResultItem{}
@@ -155,6 +161,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 				// send the changes to be processed
 				cb.dispatchBatchToWorker()
 			}
+		} else if strings.HasPrefix(line, `"last_seq":"`) {
+			lastSequence := cb.extractLastSeq(line)
+			log.Printf("lastseq %v", lastSequence)
 		}
 	}
 
@@ -170,6 +179,17 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 		cb.logFile.WriteChangesComplete()
 	}
 	return nil
+}
+
+func (cb *CloudantBackup) extractLastSeq(str string) string {
+	pattern := `"last_seq":"([^"]*)"`
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(str)
+	if matches != nil {
+		return matches[1]
+	} else {
+		return ""
+	}
 }
 
 // Run executes a Cloudant backup. If a backup is to be resumed, the list of batches
