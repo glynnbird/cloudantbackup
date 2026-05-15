@@ -121,4 +121,4 @@ To remind myself of what's going on, this diagram helps:
 - shallow mode simply fetches winning revisions - it isn't a paginated "all docs" as in couchbackup.
 - no `--attachments`
 - no equivalent of couchrestore
-- no tests!
+
