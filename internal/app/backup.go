@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,17 +31,35 @@ type outputWriter interface {
 	WriteResult(result string) error
 }
 
-type stdoutOutputWriter struct{}
+type stdoutOutputWriter struct {
+	writer *bufio.Writer
+}
+
+func newStdoutOutputWriter() *stdoutOutputWriter {
+	return &stdoutOutputWriter{
+		writer: bufio.NewWriterSize(os.Stdout, 64*1024),
+	}
+}
 
 func (w *stdoutOutputWriter) WriteHeader(mode string) error {
-	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"%v"}`, mode)
-	fmt.Println("")
-	return nil
+	if _, err := fmt.Fprintf(w.writer, `{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"%v"}`, mode); err != nil {
+		return err
+	}
+	return w.writer.WriteByte('\n')
 }
 
 func (w *stdoutOutputWriter) WriteResult(result string) error {
-	fmt.Println(result)
-	return nil
+	if _, err := w.writer.WriteString(result); err != nil {
+		return err
+	}
+	return w.writer.WriteByte('\n')
+}
+
+func (w *stdoutOutputWriter) Flush() error {
+	if w.writer == nil {
+		return nil
+	}
+	return w.writer.Flush()
 }
 
 // ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
@@ -87,7 +106,7 @@ func New() (*CloudantBackup, error) {
 	header.Add("user-agent", "couchbackup-cloudant/1.0 (Go)")
 	service.SetDefaultHeaders(header)
 
-	return NewWithDeps(appConfig, service, &stdoutOutputWriter{})
+	return NewWithDeps(appConfig, service, newStdoutOutputWriter())
 }
 
 func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWriter) (*CloudantBackup, error) {
@@ -105,7 +124,7 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 	}
 
 	if output == nil {
-		output = &stdoutOutputWriter{}
+		output = newStdoutOutputWriter()
 	}
 
 	// create struct
@@ -249,9 +268,14 @@ func (cb *CloudantBackup) extractLastSeq(str string) string {
 // fetching.
 func (cb *CloudantBackup) Run() error {
 
-	// don't forget to close the log file
+	// don't forget to flush/close buffered output and log file
 	defer func() {
-		// close the log file
+		if flusher, ok := cb.output.(interface{ Flush() error }); ok {
+			if err := flusher.Flush(); err != nil {
+				log.Printf("error flushing output: %v", err)
+			}
+		}
+
 		if cb.logFile != nil {
 			if err := cb.logFile.Close(); err != nil {
 				log.Printf("error closing log file: %v", err)

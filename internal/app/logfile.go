@@ -20,6 +20,7 @@ const changesCompletePrefix = ":changes_complete"
 // and a Load function that reads and parses a pre-existing log file.
 type LogFile struct {
 	handle   *os.File
+	writer   *bufio.Writer
 	filename string
 	mu       sync.Mutex
 }
@@ -36,6 +37,7 @@ func NewLogFile(filename string) (*LogFile, error) {
 	// create LogFile struct
 	lf := LogFile{
 		handle:   f,
+		writer:   bufio.NewWriterSize(f, 64*1024),
 		filename: filename,
 	}
 	return &lf, nil
@@ -46,7 +48,7 @@ func NewLogFile(filename string) (*LogFile, error) {
 func (lf *LogFile) WriteNewBatch(batch *Batch) error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
-	_, err := fmt.Fprintf(lf.handle, "%v batch%v %v\n", toDoPrefix, batch.batchId, batch.ToLogString())
+	_, err := fmt.Fprintf(lf.writer, "%v batch%v %v\n", toDoPrefix, batch.batchId, batch.ToLogString())
 	return err
 }
 
@@ -55,7 +57,7 @@ func (lf *LogFile) WriteNewBatch(batch *Batch) error {
 func (lf *LogFile) WriteDoneBatch(batchId int) error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
-	_, err := fmt.Fprintf(lf.handle, "%v batch%d\n", donePrefix, batchId)
+	_, err := fmt.Fprintf(lf.writer, "%v batch%d\n", donePrefix, batchId)
 	return err
 }
 
@@ -64,18 +66,27 @@ func (lf *LogFile) WriteDoneBatch(batchId int) error {
 func (lf *LogFile) WriteChangesComplete() error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
-	_, err := fmt.Fprintf(lf.handle, "%v\n", changesCompletePrefix)
+	_, err := fmt.Fprintf(lf.writer, "%v\n", changesCompletePrefix)
 	return err
 }
 
-// Close closes the writable file handle
+// Close flushes buffered data and closes the writable file handle.
 func (lf *LogFile) Close() error {
 	if lf.handle == nil {
 		return nil
 	}
-	err := lf.handle.Close()
+
+	var err error
+	if lf.writer != nil {
+		err = lf.writer.Flush()
+		lf.writer = nil
+	}
+	closeErr := lf.handle.Close()
 	lf.handle = nil
-	return err
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 // Load opens a previously saved log file and parses its contents,
