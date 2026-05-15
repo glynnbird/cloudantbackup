@@ -8,15 +8,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 	"github.com/IBM/go-sdk-core/v5/core"
 )
-
-var lastSeqRE = regexp.MustCompile(`"last_seq":"([^"]*)"`)
 
 type cloudantService interface {
 	PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
@@ -237,15 +234,6 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 		}
 	}
 	return nil
-}
-
-func (cb *CloudantBackup) extractLastSeq(str string) string {
-	matches := lastSeqRE.FindStringSubmatch(str)
-	if matches != nil {
-		return matches[1]
-	} else {
-		return ""
-	}
 }
 
 // Run executes a Cloudant backup. If a backup is to be resumed, the list of batches

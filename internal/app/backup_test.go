@@ -2,24 +2,6 @@ package backup
 
 import "testing"
 
-func TestExtractLastSeq(t *testing.T) {
-	cb := &CloudantBackup{}
-
-	got := cb.extractLastSeq(`"last_seq":"123-g1AAA","pending":0`)
-	if got != "123-g1AAA" {
-		t.Fatalf("expected last seq 123-g1AAA, got %s", got)
-	}
-}
-
-func TestExtractLastSeqMissing(t *testing.T) {
-	cb := &CloudantBackup{}
-
-	got := cb.extractLastSeq(`{"results":[]}`)
-	if got != "" {
-		t.Fatalf("expected empty string, got %s", got)
-	}
-}
-
 func TestDispatchBatchToWorker(t *testing.T) {
 	cb := &CloudantBackup{
 		buffer:       make([]string, 3),
