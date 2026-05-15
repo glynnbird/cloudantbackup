@@ -53,7 +53,7 @@ func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 		}
 
 		// parse the json
-		docs := make([]cloudantv1.BulkGetQueryDocument, bufferSize)
+		docs := make([]cloudantv1.BulkGetQueryDocument, 0, bufferSize)
 		err = json.Unmarshal([]byte(matches[2]), &docs)
 		if err != nil {
 			return nil, err
