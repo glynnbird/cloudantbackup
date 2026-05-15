@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -12,9 +13,35 @@ import (
 	"time"
 
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
+	"github.com/IBM/go-sdk-core/v5/core"
 )
 
 var lastSeqRE = regexp.MustCompile(`"last_seq":"([^"]*)"`)
+
+type cloudantService interface {
+	PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
+	NewPostChangesOptions(string) *cloudantv1.PostChangesOptions
+	NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
+	PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
+}
+
+type outputWriter interface {
+	WriteHeader(mode string) error
+	WriteResult(result string) error
+}
+
+type stdoutOutputWriter struct{}
+
+func (w *stdoutOutputWriter) WriteHeader(mode string) error {
+	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"%v"}`, mode)
+	fmt.Println("")
+	return nil
+}
+
+func (w *stdoutOutputWriter) WriteResult(result string) error {
+	fmt.Println(result)
+	return nil
+}
 
 // ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
 type ResultSet struct {
@@ -25,18 +52,19 @@ type ResultSet struct {
 
 // CloudantBackup is the state that represents a backup process.
 type CloudantBackup struct {
-	appConfig    *AppConfig             // the command-line options
-	service      *cloudantv1.CloudantV1 // the Cloudant SDK client
-	buffer       []string               // a batch of document ids to fetch
-	bufferLen    int                    // the current position in the buffer
-	wgWorker     sync.WaitGroup         // WaitGroup to keep track of running worker goroutines
-	wgCollector  sync.WaitGroup         // WaitGroup to keep track of the results collector
-	resultsChan  chan ResultSet         // channel to carry results of API calls
-	jobsChan     chan Batch             // channel to carry jobs, which uses the Batch type
-	errorsChan   chan error             // channel to carry errors that occurred when fetching documents from Cloudant
-	changesCount int                    // the total number of changes fetched from the changes follower
-	logFile      *LogFile               // the log file, which is optionally written-to during the backup process
-	batchId      int                    // the current batch id
+	appConfig    *AppConfig      // the command-line options
+	service      cloudantService // the Cloudant SDK client
+	output       outputWriter    // where backup output is written
+	buffer       []string        // a batch of document ids to fetch
+	bufferLen    int             // the current position in the buffer
+	wgWorker     sync.WaitGroup  // WaitGroup to keep track of running worker goroutines
+	wgCollector  sync.WaitGroup  // WaitGroup to keep track of the results collector
+	resultsChan  chan ResultSet  // channel to carry results of API calls
+	jobsChan     chan Batch      // channel to carry jobs, which uses the Batch type
+	errorsChan   chan error      // channel to carry errors that occurred when fetching documents from Cloudant
+	changesCount int             // the total number of changes fetched from the changes follower
+	logFile      *LogFile        // the log file, which is optionally written-to during the backup process
+	batchId      int             // the current batch id
 }
 
 // New creates a new CloudantBackup struct which stores the state of backup, the channels,
@@ -59,11 +87,16 @@ func New() (*CloudantBackup, error) {
 	header.Add("user-agent", "couchbackup-cloudant/1.0 (Go)")
 	service.SetDefaultHeaders(header)
 
+	return NewWithDeps(appConfig, service, &stdoutOutputWriter{})
+}
+
+func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWriter) (*CloudantBackup, error) {
 	// create the buffer
 	buffer := make([]string, appConfig.BufferSize)
 
 	// create log file
 	var logFile *LogFile = nil
+	var err error
 	if appConfig.LogFilename != "" {
 		logFile, err = NewLogFile(appConfig.LogFilename)
 		if err != nil {
@@ -71,17 +104,22 @@ func New() (*CloudantBackup, error) {
 		}
 	}
 
+	if output == nil {
+		output = &stdoutOutputWriter{}
+	}
+
 	// create struct
 	cb := CloudantBackup{
 		appConfig:    appConfig,
 		service:      service,
+		output:       output,
 		buffer:       buffer,
 		bufferLen:    0,
 		wgWorker:     sync.WaitGroup{},
 		wgCollector:  sync.WaitGroup{},
 		resultsChan:  make(chan ResultSet),
 		jobsChan:     make(chan Batch, appConfig.Parallelism),
-		errorsChan:   make(chan error),
+		errorsChan:   make(chan error, appConfig.Parallelism+1),
 		changesCount: 0,
 		logFile:      logFile,
 		batchId:      1,
@@ -339,8 +377,10 @@ func (cb *CloudantBackup) statsCollector() {
 	total := 0
 
 	// header line
-	fmt.Printf(`{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"%v"}`, cb.appConfig.Mode)
-	fmt.Println("")
+	if err := cb.output.WriteHeader(cb.appConfig.Mode); err != nil {
+		cb.errorsChan <- err
+		return
+	}
 
 	for {
 		select {
@@ -356,7 +396,10 @@ func (cb *CloudantBackup) statsCollector() {
 			total += r.docCount
 
 			// send the output string to stdout
-			fmt.Println(r.result)
+			if err := cb.output.WriteResult(r.result); err != nil {
+				cb.errorsChan <- err
+				return
+			}
 
 			// update the log file
 			if cb.logFile != nil {
