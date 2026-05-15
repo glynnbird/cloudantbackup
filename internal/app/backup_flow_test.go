@@ -36,7 +36,7 @@ func (f *fakeCloudantService) PostBulkGet(*cloudantv1.PostBulkGetOptions) (*clou
 
 type fakeOutputWriter struct {
 	headers []string
-	results []string
+	results [][]byte
 	err     error
 }
 
@@ -48,11 +48,11 @@ func (f *fakeOutputWriter) WriteHeader(mode string) error {
 	return nil
 }
 
-func (f *fakeOutputWriter) WriteResult(result string) error {
+func (f *fakeOutputWriter) WriteResult(result []byte) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.results = append(f.results, result)
+	f.results = append(f.results, append([]byte(nil), result...))
 	return nil
 }
 
@@ -145,8 +145,8 @@ func TestFetchDocsWorkerWritesResult(t *testing.T) {
 		if result.docCount != 1 {
 			t.Fatalf("expected doc count 1, got %d", result.docCount)
 		}
-		if !strings.Contains(result.result, "\"doc1\"") {
-			t.Fatalf("expected marshalled result to contain doc1, got %s", result.result)
+		if !strings.Contains(string(result.result), "\"doc1\"") {
+			t.Fatalf("expected marshalled result to contain doc1, got %s", string(result.result))
 		}
 	default:
 		t.Fatal("expected worker result")
@@ -170,7 +170,7 @@ func TestStatsCollectorWritesHeaderAndResults(t *testing.T) {
 	go cb.statsCollector()
 
 	cb.resultsChan <- ResultSet{
-		result:   `[{"_id":"doc1"}]`,
+		result:   []byte(`[{"_id":"doc1"}]`),
 		docCount: 1,
 		batchId:  1,
 	}
@@ -180,7 +180,7 @@ func TestStatsCollectorWritesHeaderAndResults(t *testing.T) {
 	if len(output.headers) != 1 || output.headers[0] != ModeShallow {
 		t.Fatalf("expected one header for mode %s, got %#v", ModeShallow, output.headers)
 	}
-	if len(output.results) != 1 || output.results[0] != `[{"_id":"doc1"}]` {
+	if len(output.results) != 1 || string(output.results[0]) != `[{"_id":"doc1"}]` {
 		t.Fatalf("unexpected output results: %#v", output.results)
 	}
 }

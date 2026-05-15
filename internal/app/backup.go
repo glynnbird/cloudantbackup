@@ -28,7 +28,7 @@ type cloudantService interface {
 
 type outputWriter interface {
 	WriteHeader(mode string) error
-	WriteResult(result string) error
+	WriteResult(result []byte) error
 }
 
 type stdoutOutputWriter struct {
@@ -48,8 +48,8 @@ func (w *stdoutOutputWriter) WriteHeader(mode string) error {
 	return w.writer.WriteByte('\n')
 }
 
-func (w *stdoutOutputWriter) WriteResult(result string) error {
-	if _, err := w.writer.WriteString(result); err != nil {
+func (w *stdoutOutputWriter) WriteResult(result []byte) error {
+	if _, err := w.writer.Write(result); err != nil {
 		return err
 	}
 	return w.writer.WriteByte('\n')
@@ -64,7 +64,7 @@ func (w *stdoutOutputWriter) Flush() error {
 
 // ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
 type ResultSet struct {
-	result   string
+	result   []byte
 	docCount int
 	batchId  int
 }
@@ -378,15 +378,15 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			}
 		}
 
-		// send results back to resultsChan as a ResultsSet containing a JSON string
-		// and a count of the documents
+		// send results back to resultsChan as a ResultSet containing marshalled JSON
+		// bytes and a count of the documents
 		b, err := json.Marshal(backupDocs)
 		if err != nil {
 			cb.errorsChan <- err
 			return
 		}
 		rs := ResultSet{
-			result:   string(b),
+			result:   b,
 			docCount: docCount,
 			batchId:  job.batchId,
 		}
