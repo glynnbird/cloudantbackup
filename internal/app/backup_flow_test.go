@@ -58,7 +58,7 @@ func (f *fakeOutputWriter) WriteResult(result []byte) error {
 
 func TestSpoolChangesFeedDispatchesBatches(t *testing.T) {
 	service := &fakeCloudantService{
-		changesStream: io.NopCloser(strings.NewReader("{\"id\":\"doc1\"}\n{\"id\":\"doc2\"}\n\"last_seq\":\"2-g1AAA\"\n")),
+		changesStream: io.NopCloser(strings.NewReader(`{"results":[{"id":"doc1"},{"id":"doc2"}],"last_seq":"2-g1AAA"}`)),
 	}
 	output := &fakeOutputWriter{}
 	cb, err := NewWithDeps(&AppConfig{

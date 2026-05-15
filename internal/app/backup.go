@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -177,6 +176,24 @@ func (cb *CloudantBackup) dispatchBatchToWorker() {
 	cb.bufferLen = 0
 }
 
+type changesFeed struct {
+	Results []cloudantv1.ChangesResultItem `json:"results"`
+	LastSeq string                         `json:"last_seq"`
+}
+
+func (cb *CloudantBackup) queueChange(change cloudantv1.ChangesResultItem) {
+	if change.ID == nil {
+		return
+	}
+
+	cb.buffer[cb.bufferLen] = *change.ID
+	cb.bufferLen++
+
+	if cb.bufferLen == cb.appConfig.BufferSize {
+		cb.dispatchBatchToWorker()
+	}
+}
+
 // SpoolChangesFeed consumes the Cloudant changes feed, extracting batches of
 // document ids that are to be fetched later. These are put into a Batch struct
 // and sent to an available worker using the jobsChan.
@@ -192,55 +209,24 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 		return err
 	}
 
-	// scan through the changes feed line by line
-	scanner := bufio.NewScanner(stream)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		// fetch a line
-		line := scanner.Text()
-		if len(line) == 0 {
-			continue
-		}
-		// changes look like this: { ... }, ignore anything else
-		if line[0] == '{' {
-			// strip off the ,
-			if line[len(line)-1] == ',' {
-				line = line[:len(line)-1]
-			}
+	decoder := json.NewDecoder(stream)
+	var feed changesFeed
+	if err := decoder.Decode(&feed); err != nil {
+		return err
+	}
 
-			// parse as a changes result item
-			change := cloudantv1.ChangesResultItem{}
-			err = json.Unmarshal([]byte(line), &change)
-			if err != nil {
-				continue
-			}
-			if change.ID == nil {
-				continue
-			}
+	for _, change := range feed.Results {
+		cb.queueChange(change)
+	}
 
-			// add the id to our buffer
-			cb.buffer[cb.bufferLen] = *change.ID
-			cb.bufferLen++
-
-			// if we have a full buffer
-			if cb.bufferLen == cb.appConfig.BufferSize {
-				// send the changes to be processed
-				cb.dispatchBatchToWorker()
-			}
-		} else if strings.HasPrefix(line, `"last_seq":"`) {
-			lastSequence := cb.extractLastSeq(line)
-			log.Printf("lastseq %v", lastSequence)
-		}
+	if feed.LastSeq != "" {
+		log.Printf("lastseq %v", feed.LastSeq)
 	}
 
 	// if there are still unprocessed changes in the buffer
 	if cb.bufferLen > 0 {
 		// send them to be processed
 		cb.dispatchBatchToWorker()
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
 	}
 
 	// we're now finished consuming the changes feed
