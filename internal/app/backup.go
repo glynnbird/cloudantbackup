@@ -132,6 +132,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 
 	// scan through the changes feed line by line
 	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		// fetch a line
 		line := scanner.Text()
@@ -171,6 +172,10 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	if cb.bufferLen > 0 {
 		// send them to be processed
 		cb.dispatchBatchToWorker()
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 
 	// we're now finished consuming the changes feed
