@@ -17,9 +17,8 @@ const (
 	changesCompletePrefix = ":changes_complete"
 )
 
-// LogFile represents a log file including a writable file handle and its filename,
-// together with some helper functions that allow the three types of lines to be written
-// and a Load function that reads and parses a pre-existing log file.
+// LogFile appends backup progress to a log file and can reload that state
+// to support resume.
 type LogFile struct {
 	handle   *os.File
 	writer   *bufio.Writer
@@ -27,8 +26,7 @@ type LogFile struct {
 	mu       sync.Mutex
 }
 
-// NewLogFile creates a LogFile struct which models a log file. The file is opened
-// for append and for writing. The filename is also stored for future reference.
+// NewLogFile creates a LogFile for appending backup progress.
 func NewLogFile(filename string) (*LogFile, error) {
 	// open the log file
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -54,8 +52,8 @@ func (lf *LogFile) WriteNewBatch(batch *Batch) error {
 	return err
 }
 
-// WriteDoneBatch writes a ":d batchX" line to the log file, indicating that a batch has
-// been successfully fetched
+// WriteDoneBatch writes a ":d batchX" line to the log file to record that a
+// batch has been fetched successfully.
 func (lf *LogFile) WriteDoneBatch(batchId int) error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
@@ -63,8 +61,8 @@ func (lf *LogFile) WriteDoneBatch(batchId int) error {
 	return err
 }
 
-// WriteChangesComplete writes a line to the log file to indicate that the changes feed has been
-// completely consumed.
+// WriteChangesComplete writes a marker showing that the changes feed has been
+// consumed completely.
 func (lf *LogFile) WriteChangesComplete() error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
@@ -91,11 +89,8 @@ func (lf *LogFile) Close() error {
 	return closeErr
 }
 
-// Load opens a previously saved log file and parses its contents,
-// creating a slice of Batch structs, each of which represents a batch
-// of document ids that need fetching. Then it creates a final slice
-// of Batches, removing batches that have already been fetched - so the
-// returned slice are the batches that still need fetching.
+// Load parses a previously saved log file and returns the batches that still
+// need to be fetched.
 func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 	rc, err := os.Open(lf.filename)
 	if err != nil {
@@ -120,6 +115,8 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 	return &batchesToDo, nil
 }
 
+// parseLogFile reads log lines and returns discovered batches, completed batch
+// IDs, and whether the changes feed was marked complete.
 func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]bool, bool, error) {
 	scanner := bufio.NewScanner(rc)
 	batches := make([]Batch, 0, 100)
@@ -155,6 +152,7 @@ func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]b
 	return batches, doneBatchIds, changesComplete, nil
 }
 
+// processTodoLine parses a todo log line into a Batch.
 func (lf *LogFile) processTodoLine(line string, bufferSize int) (*Batch, error) {
 	batch, err := NewBatchFromLogLine(line, bufferSize)
 	if err != nil {
@@ -163,6 +161,7 @@ func (lf *LogFile) processTodoLine(line string, bufferSize int) (*Batch, error) 
 	return batch, nil
 }
 
+// processDoneLine extracts a completed batch ID from a done log line.
 func (lf *LogFile) processDoneLine(line string) (int, error) {
 	re := regexp.MustCompile(`^\:d batch([0-9]+)$`)
 	matches := re.FindStringSubmatch(line)
@@ -177,6 +176,7 @@ func (lf *LogFile) processDoneLine(line string) (int, error) {
 	return batchId, nil
 }
 
+// validateLogState checks that the log contains enough information to resume safely.
 func (lf *LogFile) validateLogState(changesComplete bool, batches []Batch, doneBatchIds map[int]bool) error {
 	if !changesComplete {
 		return errors.New("cannot resume - changes feed not complete")
@@ -189,6 +189,7 @@ func (lf *LogFile) validateLogState(changesComplete bool, batches []Batch, doneB
 	return nil
 }
 
+// filterPendingBatches removes batches that have already been marked done.
 func (lf *LogFile) filterPendingBatches(batches []Batch, doneBatchIds map[int]bool) []Batch {
 	batchesToDo := make([]Batch, 0, len(batches)-len(doneBatchIds))
 	for _, batch := range batches {

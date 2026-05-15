@@ -9,17 +9,15 @@ import (
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 )
 
-// Batch is a list of document ids which originate from the changes feed. There is also an "id"
-// which identifies this batch. These are the documents that need fetching from the database. When a
-// new batch is created (either from a slice of ids, or from a log line) the list of ids is converted
-// into a slice of BulkGetQueryDocument structs (docs), which is what is needed by the API call.
-// The Batch is what it sent to the fetchDocsWorker on the jobsChan
+// Batch represents a set of document IDs collected from the changes feed.
+// Each batch has an ID and a slice of BulkGetQueryDocument values that can be
+// passed directly to the bulk get API.
 type Batch struct {
 	batchId int
 	docs    []cloudantv1.BulkGetQueryDocument
 }
 
-// NewBatch creates a new batch given its id and an slice of document ids
+// NewBatch creates a batch from its ID and a slice of document IDs.
 func NewBatch(batchId int, buffer []string) *Batch {
 	batch := Batch{
 		batchId: batchId,
@@ -31,14 +29,12 @@ func NewBatch(batchId int, buffer []string) *Batch {
 	return &batch
 }
 
-// NewBatchFromLogLine creates a new batch given a previously logged log line
-// which looks like this:
+// NewBatchFromLogLine creates a batch from a previously logged line such as:
 //
 //	:t batch56 [{"id":"a"},{"id":"b"}]
 //
-// It uses regular expressions to extract the batchId and Unmarshalls the
-// array of objects back into arrays of BulkGetQueryDocument and arrays of
-// document ids
+// It extracts the batch ID and unmarshals the JSON document list back into
+// BulkGetQueryDocument values.
 func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 	// log lines look like this:
 	// :t batch56 [{"id":"a"},{"id":"b"}]
@@ -70,8 +66,7 @@ func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 	}
 }
 
-// ToLogString turns the slice of BulkGetQueryDocuments into a JSON
-// string suitable for the logs
+// ToLogString marshals the batch documents into a JSON string suitable for logging.
 func (batch *Batch) ToLogString() string {
 	b, err := json.Marshal(batch.docs)
 	if err != nil {

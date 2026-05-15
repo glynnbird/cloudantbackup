@@ -86,8 +86,8 @@ type (
 	}
 )
 
-// New creates a new CloudantBackup struct which stores the state of backup, the channels,
-// the log file and Cloudant service. A helper function Run actually executes the backup.
+// New creates a CloudantBackup with its default dependencies.
+// Call Run to execute the backup.
 func New() (*CloudantBackup, error) {
 
 	// load the CLI parameters
@@ -147,8 +147,8 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 	return &cb, nil
 }
 
-// DispatchBatchToWorker creates a new Batch struct and sends it to a
-// worker goroutine by sending the batch to the jobsChan
+// dispatchBatchToWorker creates a Batch from the buffered document IDs and
+// sends it to a worker via jobsChan.
 func (cb *CloudantBackup) dispatchBatchToWorker() {
 	if cb.bufferLen == 0 {
 		return
@@ -177,11 +177,14 @@ func (cb *CloudantBackup) dispatchBatchToWorker() {
 	cb.bufferLen = 0
 }
 
+// changesFeed models the subset of the Cloudant _changes response used by the backup.
 type changesFeed struct {
 	Results []cloudantv1.ChangesResultItem `json:"results"`
 	LastSeq string                         `json:"last_seq"`
 }
 
+// queueChange adds a change ID to the current batch buffer and dispatches a
+// full batch when the buffer reaches capacity.
 func (cb *CloudantBackup) queueChange(change cloudantv1.ChangesResultItem) {
 	if change.ID == nil {
 		return
@@ -195,9 +198,8 @@ func (cb *CloudantBackup) queueChange(change cloudantv1.ChangesResultItem) {
 	}
 }
 
-// SpoolChangesFeed consumes the Cloudant changes feed, extracting batches of
-// document ids that are to be fetched later. These are put into a Batch struct
-// and sent to an available worker using the jobsChan.
+// SpoolChangesFeed reads the Cloudant _changes feed, batches document IDs, and
+// sends the batches to workers through jobsChan.
 func (cb *CloudantBackup) SpoolChangesFeed() error {
 
 	// create a changes feed request
@@ -240,10 +242,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	return nil
 }
 
-// Run executes a Cloudant backup. If a backup is to be resumed, the list of batches
-// of document ids to fetch is calculated from a log file, otherwise batches are
-// created by spooling through the changes feed. A set of workers handles the document
-// fetching.
+// Run executes the backup.
+// If Resume is enabled, pending batches are loaded from the log file.
+// Otherwise, batches are created from the _changes feed and processed by workers.
 func (cb *CloudantBackup) Run() error {
 
 	// don't forget to flush/close buffered output and log file
@@ -327,8 +328,8 @@ func (cb *CloudantBackup) Run() error {
 	}
 }
 
-// fetchDocsWorker is a goroutine that fetches batches of document ids from the jobsChan. It writes a ResultSet
-// back to the resultsChan and any errors to errorsChan
+// fetchDocsWorker reads batches from jobsChan, fetches the documents from
+// Cloudant, and sends ResultSet values to resultsChan.
 func (cb *CloudantBackup) fetchDocsWorker() {
 	// make sure we release our slot in the WaitGroup
 	defer cb.wgWorker.Done()
@@ -356,8 +357,8 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			}
 		}
 
-		// send results back to resultsChan as a ResultSet containing marshalled JSON
-		// bytes and a count of the documents
+		// send results back to resultsChan as marshalled JSON bytes together
+		// with the number of documents fetched
 		b, err := json.Marshal(backupDocs)
 		if err != nil {
 			cb.errorsChan <- err
@@ -372,8 +373,8 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 	}
 }
 
-// statsCollector is a goroutine that waits for data arriving back on resultsChan or
-// errorsChan, aggregating results and stopping on the first error.
+// statsCollector writes the backup header and result batches, tracks the total
+// number of saved documents, and stops on the first error.
 func (cb *CloudantBackup) statsCollector() {
 	defer cb.wgCollector.Done()
 	total := 0
@@ -397,7 +398,7 @@ func (cb *CloudantBackup) statsCollector() {
 			// increment docCount
 			total += r.docCount
 
-			// send the output string to stdout
+			// write the output batch
 			if err := cb.output.WriteResult(r.result); err != nil {
 				cb.errorsChan <- err
 				return

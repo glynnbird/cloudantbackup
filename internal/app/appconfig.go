@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// defaults
+// Default and validation values.
 const (
 	defaultDatabaseName string = ""
 	defaultParallelism  int    = 5
@@ -34,7 +34,7 @@ type AppConfig struct {
 	Since        string
 }
 
-// NewAppConfig creates a new AppConfig struct, parsing any command-line parameters
+// NewAppConfig parses command-line flags and validates the resulting configuration.
 func NewAppConfig() (*AppConfig, error) {
 	appConfig := AppConfig{}
 
