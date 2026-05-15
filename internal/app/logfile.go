@@ -11,9 +11,11 @@ import (
 	"sync"
 )
 
-const toDoPrefix = ":t"
-const donePrefix = ":d"
-const changesCompletePrefix = ":changes_complete"
+const (
+	toDoPrefix            = ":t"
+	donePrefix            = ":d"
+	changesCompletePrefix = ":changes_complete"
+)
 
 // LogFile represents a log file including a writable file handle and its filename,
 // together with some helper functions that allow the three types of lines to be written

@@ -15,21 +15,23 @@ import (
 	"github.com/IBM/go-sdk-core/v5/core"
 )
 
-type cloudantService interface {
-	PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
-	NewPostChangesOptions(string) *cloudantv1.PostChangesOptions
-	NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
-	PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
-}
+type (
+	cloudantService interface {
+		PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
+		NewPostChangesOptions(string) *cloudantv1.PostChangesOptions
+		NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
+		PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
+	}
 
-type outputWriter interface {
-	WriteHeader(mode string) error
-	WriteResult(result []byte) error
-}
+	outputWriter interface {
+		WriteHeader(mode string) error
+		WriteResult(result []byte) error
+	}
 
-type stdoutOutputWriter struct {
-	writer *bufio.Writer
-}
+	stdoutOutputWriter struct {
+		writer *bufio.Writer
+	}
+)
 
 func newStdoutOutputWriter() *stdoutOutputWriter {
 	return &stdoutOutputWriter{
@@ -58,29 +60,31 @@ func (w *stdoutOutputWriter) Flush() error {
 	return w.writer.Flush()
 }
 
-// ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
-type ResultSet struct {
-	result   []byte
-	docCount int
-	batchId  int
-}
+type (
+	// ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
+	ResultSet struct {
+		result   []byte
+		docCount int
+		batchId  int
+	}
 
-// CloudantBackup is the state that represents a backup process.
-type CloudantBackup struct {
-	appConfig    *AppConfig      // the command-line options
-	service      cloudantService // the Cloudant SDK client
-	output       outputWriter    // where backup output is written
-	buffer       []string        // a batch of document ids to fetch
-	bufferLen    int             // the current position in the buffer
-	wgWorker     sync.WaitGroup  // WaitGroup to keep track of running worker goroutines
-	wgCollector  sync.WaitGroup  // WaitGroup to keep track of the results collector
-	resultsChan  chan ResultSet  // channel to carry results of API calls
-	jobsChan     chan Batch      // channel to carry jobs, which uses the Batch type
-	errorsChan   chan error      // channel to carry errors that occurred when fetching documents from Cloudant
-	changesCount int             // the total number of changes fetched from the changes follower
-	logFile      *LogFile        // the log file, which is optionally written-to during the backup process
-	batchId      int             // the current batch id
-}
+	// CloudantBackup is the state that represents a backup process.
+	CloudantBackup struct {
+		appConfig    *AppConfig      // the command-line options
+		service      cloudantService // the Cloudant SDK client
+		output       outputWriter    // where backup output is written
+		buffer       []string        // a batch of document ids to fetch
+		bufferLen    int             // the current position in the buffer
+		wgWorker     sync.WaitGroup  // WaitGroup to keep track of running worker goroutines
+		wgCollector  sync.WaitGroup  // WaitGroup to keep track of the results collector
+		resultsChan  chan ResultSet  // channel to carry results of API calls
+		jobsChan     chan Batch      // channel to carry jobs, which uses the Batch type
+		errorsChan   chan error      // channel to carry errors that occurred when fetching documents from Cloudant
+		changesCount int             // the total number of changes fetched from the changes follower
+		logFile      *LogFile        // the log file, which is optionally written-to during the backup process
+		batchId      int             // the current batch id
+	}
+)
 
 // New creates a new CloudantBackup struct which stores the state of backup, the channels,
 // the log file and Cloudant service. A helper function Run actually executes the backup.
