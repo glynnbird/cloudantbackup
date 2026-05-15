@@ -103,7 +103,10 @@ func (cb *CloudantBackup) dispatchBatchToWorker() {
 
 	// log it
 	if cb.logFile != nil {
-		cb.logFile.WriteNewBatch(batch)
+		if err := cb.logFile.WriteNewBatch(batch); err != nil {
+			cb.errorsChan <- err
+			return
+		}
 	}
 
 	// send it to a worker via the jobsChan
@@ -152,6 +155,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 			if err != nil {
 				continue
 			}
+			if change.ID == nil {
+				continue
+			}
 
 			// add the id to our buffer
 			cb.buffer[cb.bufferLen] = *change.ID
@@ -181,7 +187,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	// we're now finished consuming the changes feed
 	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
 	if cb.logFile != nil {
-		cb.logFile.WriteChangesComplete()
+		if err := cb.logFile.WriteChangesComplete(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -207,7 +215,9 @@ func (cb *CloudantBackup) Run() error {
 	defer func() {
 		// close the log file
 		if cb.logFile != nil {
-			cb.logFile.Close()
+			if err := cb.logFile.Close(); err != nil {
+				log.Printf("error closing log file: %v", err)
+			}
 		}
 	}()
 
@@ -236,7 +246,9 @@ func (cb *CloudantBackup) Run() error {
 		log.Printf("Resuming: %v batches", len(*batchesToResume))
 		for _, batch := range *batchesToResume {
 			// update the log file
-			cb.logFile.WriteNewBatch(&batch)
+			if err := cb.logFile.WriteNewBatch(&batch); err != nil {
+				return err
+			}
 
 			// send it to a worker via the jobsChan
 			cb.jobsChan <- batch
@@ -348,7 +360,10 @@ func (cb *CloudantBackup) statsCollector() {
 
 			// update the log file
 			if cb.logFile != nil {
-				cb.logFile.WriteDoneBatch(r.batchId)
+				if err := cb.logFile.WriteDoneBatch(r.batchId); err != nil {
+					cb.errorsChan <- err
+					return
+				}
 			}
 
 			// log the completion of this batch on stderr

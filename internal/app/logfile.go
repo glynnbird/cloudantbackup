@@ -69,9 +69,13 @@ func (lf *LogFile) WriteChangesComplete() error {
 }
 
 // Close closes the writable file handle
-func (lf *LogFile) Close() {
-	lf.handle.Close()
+func (lf *LogFile) Close() error {
+	if lf.handle == nil {
+		return nil
+	}
+	err := lf.handle.Close()
 	lf.handle = nil
+	return err
 }
 
 // Load opens a previously saved log file and parses its contents,
@@ -129,6 +133,10 @@ func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]b
 		} else if strings.HasPrefix(line, changesCompletePrefix) {
 			changesComplete = true
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, nil, false, err
 	}
 
 	return batches, doneBatchIds, changesComplete, nil
