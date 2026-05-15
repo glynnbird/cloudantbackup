@@ -243,6 +243,11 @@ func (cb *CloudantBackup) Run() error {
 		// ... or spool the changes feed ...
 		err = cb.SpoolChangesFeed()
 		if err != nil {
+			close(cb.jobsChan)
+			cb.wgWorker.Wait()
+			close(cb.resultsChan)
+			close(cb.errorsChan)
+			cb.wgCollector.Wait()
 			return err
 		}
 	}
@@ -255,10 +260,14 @@ func (cb *CloudantBackup) Run() error {
 
 	// wait for the collector to finish
 	close(cb.resultsChan)
-	close(cb.errorsChan)
 	cb.wgCollector.Wait()
 
-	return nil
+	select {
+	case err := <-cb.errorsChan:
+		return err
+	default:
+		return nil
+	}
 }
 
 // fetchDocsWorker is a goroutine that fetches batches of document ids from the jobsChan. It writes a ResultSet
@@ -307,7 +316,7 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 }
 
 // statsCollector is a goroutine that waits for data arriving back on resultsChan or
-// errorsChan, aggregating results and panicking if an error occurs
+// errorsChan, aggregating results and stopping on the first error.
 func (cb *CloudantBackup) statsCollector() {
 	defer cb.wgCollector.Done()
 	total := 0
@@ -340,12 +349,8 @@ func (cb *CloudantBackup) statsCollector() {
 			// log the completion of this batch on stderr
 			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchId, r.docCount, total)
 
-		case err, ok := <-cb.errorsChan:
-			if !ok {
-				return
-			}
-			// any error on errorsChan is fatal
-			panic(fmt.Sprintf("ERROR: %v", err))
+		case <-cb.errorsChan:
+			return
 		}
 	}
 }
