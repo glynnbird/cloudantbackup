@@ -50,7 +50,7 @@ cloudantbackup --db mydb --parallelism 10 --buffer-size 1000 --mode shallow > my
 The backup itself is written to stdout. It consists of a header line followed by one line per batch of backed-up documents:
 
 ```json
-{"name":"@cloudant/couchbackup","version":"2.9.10","mode":"full"}
+{"name":"@cloudant/couchbackup","version":"1.0.0","mode":"full"}
 [{"_id":"a","_rev":"1-123","x":1}...]
 ```
 

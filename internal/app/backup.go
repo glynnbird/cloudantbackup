@@ -14,6 +14,8 @@ import (
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 )
 
+var lastSeqRE = regexp.MustCompile(`"last_seq":"([^"]*)"`)
+
 // ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
 type ResultSet struct {
 	result   string
@@ -195,9 +197,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 }
 
 func (cb *CloudantBackup) extractLastSeq(str string) string {
-	pattern := `"last_seq":"([^"]*)"`
-	re := regexp.MustCompile(pattern)
-	matches := re.FindStringSubmatch(str)
+	matches := lastSeqRE.FindStringSubmatch(str)
 	if matches != nil {
 		return matches[1]
 	} else {
@@ -303,7 +303,7 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
 		if err != nil {
 			cb.errorsChan <- err
-			continue
+			return
 		}
 		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
 		docCount := 0

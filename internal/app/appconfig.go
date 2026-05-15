@@ -14,7 +14,7 @@ const (
 	maxParallelism      int    = 50
 	defaultBufferSize   int    = 500
 	minBufferSize       int    = 1
-	maxBuferSize        int    = 10000
+	maxBufferSize       int    = 10000
 	ModeFull            string = "full"
 	ModeShallow         string = "shallow"
 	defaultMode         string = ModeFull
@@ -54,9 +54,9 @@ func NewAppConfig() (*AppConfig, error) {
 	} else if appConfig.Parallelism < minParallelism || appConfig.Parallelism > maxParallelism {
 		return nil, fmt.Errorf("parallelism must be between %v and %v", minParallelism, maxParallelism)
 	} else if appConfig.Mode != ModeFull && appConfig.Mode != ModeShallow {
-		return nil, fmt.Errorf("mode must one of %v and %v", ModeFull, ModeShallow)
-	} else if appConfig.BufferSize < minBufferSize || appConfig.BufferSize > maxBuferSize {
-		return nil, fmt.Errorf("buffer-size must be between %v and %v", minBufferSize, maxBuferSize)
+		return nil, fmt.Errorf("mode must be one of %v or %v", ModeFull, ModeShallow)
+	} else if appConfig.BufferSize < minBufferSize || appConfig.BufferSize > maxBufferSize {
+		return nil, fmt.Errorf("buffer-size must be between %v and %v", minBufferSize, maxBufferSize)
 	} else if appConfig.Resume && appConfig.LogFilename == "" {
 		return nil, fmt.Errorf("--resume must be paired with --log")
 	} else {
