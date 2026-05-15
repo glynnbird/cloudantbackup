@@ -136,7 +136,7 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 		bufferLen:    0,
 		wgWorker:     sync.WaitGroup{},
 		wgCollector:  sync.WaitGroup{},
-		resultsChan:  make(chan ResultSet),
+		resultsChan:  make(chan ResultSet, appConfig.Parallelism),
 		jobsChan:     make(chan Batch, appConfig.Parallelism),
 		errorsChan:   make(chan error, appConfig.Parallelism+1),
 		changesCount: 0,
