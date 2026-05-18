@@ -36,7 +36,7 @@ func TestSpoolChangesFeedDispatchesBatches(t *testing.T) {
 		t.Fatalf("unexpected error creating backup: %v", err)
 	}
 
-	if err := cb.SpoolChangesFeed(context.Background()); err != nil {
+	if _, err := cb.SpoolChangesFeed(context.Background()); err != nil {
 		t.Fatalf("unexpected error spooling changes: %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestSpoolChangesFeedUsesLastNonNilSeqInLog(t *testing.T) {
 		t.Fatalf("unexpected error creating backup: %v", err)
 	}
 
-	if err := cb.SpoolChangesFeed(context.Background()); err != nil {
+	if _, err := cb.SpoolChangesFeed(context.Background()); err != nil {
 		t.Fatalf("unexpected error spooling changes: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestSpoolChangesFeedReturnsFollowerError(t *testing.T) {
 		t.Fatalf("unexpected error creating backup: %v", err)
 	}
 
-	err = cb.SpoolChangesFeed(context.Background())
+	_, err = cb.SpoolChangesFeed(context.Background())
 	if err != io.ErrUnexpectedEOF {
 		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
@@ -255,7 +255,7 @@ func TestSpoolChangesFeedHonorsCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = cb.SpoolChangesFeed(ctx)
+	_, err = cb.SpoolChangesFeed(ctx)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}

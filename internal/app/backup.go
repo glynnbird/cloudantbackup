@@ -180,19 +180,17 @@ func (cb *CloudantBackup) queueChange(ctx context.Context, change cloudantv1.Cha
 
 // SpoolChangesFeed reads the Cloudant _changes feed, batches document IDs, and
 // sends the batches to workers through jobsChan.
-func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
+func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) (string, error) {
 	since, err := cb.followChangesFeed(ctx, cb.appConfig.Since)
 	if err != nil {
-		return err
+		return since, err
 	}
-
-	log.Printf("lastseq %v", since)
 
 	// if there are still unprocessed changes in the buffer
 	if cb.bufferLen > 0 {
 		// send them to be processed
 		if err := cb.dispatchBatchToWorker(ctx); err != nil {
-			return err
+			return since, err
 		}
 	}
 
@@ -200,10 +198,10 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
 	if cb.logFile != nil {
 		if err := cb.logFile.WriteChangesComplete(); err != nil {
-			return err
+			return since, err
 		}
 	}
-	return nil
+	return since, nil
 }
 
 // followChangesFeed consumes the one-off changes follower until completion and
@@ -249,13 +247,25 @@ func (cb *CloudantBackup) Run(ctx context.Context) error {
 	}
 
 	cb.startWorkers(ctx, cancel)
-	defer cb.shutdownWorkers()
 
-	if err := cb.produceBatches(ctx, cancel, batchesToResume); err != nil {
+	lastSeq, err := cb.produceBatches(ctx, cancel, batchesToResume)
+	if err != nil {
+		cancel()
+		cb.shutdownWorkers()
 		return err
 	}
 
-	return cb.finalError()
+	cb.shutdownWorkers()
+
+	if err := cb.finalError(); err != nil {
+		return err
+	}
+
+	if !cb.appConfig.Resume {
+		log.Printf("lastseq %v", lastSeq)
+	}
+
+	return nil
 }
 
 // closeResources flushes and closes optional output resources.
@@ -301,36 +311,37 @@ func (cb *CloudantBackup) shutdownWorkers() {
 }
 
 // produceBatches either resumes pending work or spools fresh changes.
-func (cb *CloudantBackup) produceBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
+func (cb *CloudantBackup) produceBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) (string, error) {
 	if cb.appConfig.Resume {
 		return cb.resumeBatches(ctx, cancel, batchesToResume)
 	}
 
-	if err := cb.SpoolChangesFeed(ctx); err != nil {
+	lastSeq, err := cb.SpoolChangesFeed(ctx)
+	if err != nil {
 		cancel()
-		return err
+		return "", err
 	}
-	return nil
+	return lastSeq, nil
 }
 
 // resumeBatches re-enqueues batches loaded from the resume log.
-func (cb *CloudantBackup) resumeBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
+func (cb *CloudantBackup) resumeBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) (string, error) {
 	log.Printf("Resuming: %v batches", len(batchesToResume))
 	for _, batch := range batchesToResume {
 		if err := cb.logFile.WriteNewBatch(&batch); err != nil {
 			cancel()
-			return err
+			return "", err
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case cb.jobsChan <- batch:
 		}
 
 		cb.changesCount += len(batch.docs)
 	}
-	return nil
+	return "", nil
 }
 
 // finalError returns the first asynchronously reported worker or collector error, if any.
@@ -416,8 +427,8 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 	}
 }
 
-// statsCollector writes the backup header and result batches, tracks the total
-// number of saved documents, and stops on the first error.
+// statsCollector writes the backup header and result batches, tracks total
+// saved documents and document errors, and stops on the first error.
 func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.CancelFunc) {
 	defer cb.wgCollector.Done()
 	totalDocs := 0
@@ -457,7 +468,7 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 			}
 
 			// log the completion of this batch on stderr
-			log.Printf("Batch %d: saved %d docs, %d errors. Total docs: %d Total errors: %d\n", r.batchID, r.docCount, r.errCount, totalDocs, totalErrors)
+			log.Printf("batch %d: saved %d docs, %d errors; totals docs=%d errors=%d", r.batchID, r.docCount, r.errCount, totalDocs, totalErrors)
 		}
 	}
 }
