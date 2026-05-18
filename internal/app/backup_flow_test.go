@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -72,7 +73,7 @@ func TestSpoolChangesFeedDispatchesBatches(t *testing.T) {
 		t.Fatalf("unexpected error creating backup: %v", err)
 	}
 
-	if err := cb.SpoolChangesFeed(); err != nil {
+	if err := cb.SpoolChangesFeed(context.Background()); err != nil {
 		t.Fatalf("unexpected error spooling changes: %v", err)
 	}
 
@@ -129,7 +130,7 @@ func TestFetchDocsWorkerWritesResult(t *testing.T) {
 	}
 
 	cb.wgWorker.Add(1)
-	go cb.fetchDocsWorker()
+	go cb.fetchDocsWorker(context.Background(), func() {})
 
 	cb.resultsChan = make(chan ResultSet, 1)
 
@@ -167,7 +168,7 @@ func TestStatsCollectorWritesHeaderAndResults(t *testing.T) {
 	}
 
 	cb.wgCollector.Add(1)
-	go cb.statsCollector()
+	go cb.statsCollector(context.Background(), func() {})
 
 	cb.resultsChan <- ResultSet{
 		result:   []byte(`[{"_id":"doc1"}]`),
@@ -182,5 +183,81 @@ func TestStatsCollectorWritesHeaderAndResults(t *testing.T) {
 	}
 	if len(output.results) != 1 || string(output.results[0]) != `[{"_id":"doc1"}]` {
 		t.Fatalf("unexpected output results: %#v", output.results)
+	}
+}
+
+func TestSpoolChangesFeedHonorsCancelledContext(t *testing.T) {
+	service := &fakeCloudantService{
+		changesStream: io.NopCloser(strings.NewReader(`{"results":[{"id":"doc1"}],"last_seq":"1-g1AAA"}`)),
+	}
+	cb, err := NewWithDeps(&AppConfig{
+		DatabaseName: "mydb",
+		Parallelism:  1,
+		BufferSize:   1,
+		Mode:         ModeFull,
+		Since:        "0",
+	}, service, &fakeOutputWriter{})
+	if err != nil {
+		t.Fatalf("unexpected error creating backup: %v", err)
+	}
+
+	cb.jobsChan = make(chan Batch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = cb.SpoolChangesFeed(ctx)
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestFetchDocsWorkerHonorsCancelledContextOnResultSend(t *testing.T) {
+	docID := "doc1"
+	doc := cloudantv1.Document{
+		ID: &docID,
+	}
+	service := &fakeCloudantService{
+		bulkGetResult: &cloudantv1.BulkGetResult{
+			Results: []cloudantv1.BulkGetResultItem{
+				{
+					ID: &docID,
+					Docs: []cloudantv1.BulkGetResultDocument{
+						{Ok: &doc},
+					},
+				},
+			},
+		},
+	}
+	cb, err := NewWithDeps(&AppConfig{
+		DatabaseName: "mydb",
+		Parallelism:  1,
+		BufferSize:   2,
+		Mode:         ModeFull,
+		Since:        "0",
+	}, service, &fakeOutputWriter{})
+	if err != nil {
+		t.Fatalf("unexpected error creating backup: %v", err)
+	}
+
+	cb.resultsChan = make(chan ResultSet)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cb.wgWorker.Add(1)
+	go cb.fetchDocsWorker(ctx, cancel)
+
+	cb.jobsChan <- *NewBatch(1, []string{"doc1"})
+
+	cancel()
+	close(cb.jobsChan)
+	cb.wgWorker.Wait()
+
+	select {
+	case result := <-cb.resultsChan:
+		t.Fatalf("did not expect published result after cancellation: %+v", result)
+	default:
 	}
 }

@@ -1,6 +1,9 @@
 package backup
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestDispatchBatchToWorker(t *testing.T) {
 	cb := &CloudantBackup{
@@ -14,7 +17,9 @@ func TestDispatchBatchToWorker(t *testing.T) {
 	cb.buffer[0] = "doc1"
 	cb.buffer[1] = "doc2"
 
-	cb.dispatchBatchToWorker()
+	if err := cb.dispatchBatchToWorker(context.Background()); err != nil {
+		t.Fatalf("unexpected error dispatching batch: %v", err)
+	}
 
 	select {
 	case batch := <-cb.jobsChan:
@@ -54,7 +59,9 @@ func TestDispatchBatchToWorkerEmptyBuffer(t *testing.T) {
 		batchId:    9,
 	}
 
-	cb.dispatchBatchToWorker()
+	if err := cb.dispatchBatchToWorker(context.Background()); err != nil {
+		t.Fatalf("unexpected error dispatching empty batch: %v", err)
+	}
 
 	select {
 	case batch := <-cb.jobsChan:

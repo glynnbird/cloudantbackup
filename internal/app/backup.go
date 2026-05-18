@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -149,9 +150,9 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 
 // dispatchBatchToWorker creates a Batch from the buffered document IDs and
 // sends it to a worker via jobsChan.
-func (cb *CloudantBackup) dispatchBatchToWorker() {
+func (cb *CloudantBackup) dispatchBatchToWorker(ctx context.Context) error {
 	if cb.bufferLen == 0 {
-		return
+		return nil
 	}
 	// clone the batch to avoid data being overwritten
 	clone := make([]string, cb.bufferLen)
@@ -163,18 +164,22 @@ func (cb *CloudantBackup) dispatchBatchToWorker() {
 	// log it
 	if cb.logFile != nil {
 		if err := cb.logFile.WriteNewBatch(batch); err != nil {
-			cb.errorsChan <- err
-			return
+			return err
 		}
 	}
 
 	// send it to a worker via the jobsChan
-	cb.jobsChan <- *batch
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case cb.jobsChan <- *batch:
+	}
 
 	// update counters
 	cb.batchId++
 	cb.changesCount += cb.bufferLen
 	cb.bufferLen = 0
+	return nil
 }
 
 // changesFeed models the subset of the Cloudant _changes response used by the backup.
@@ -185,22 +190,23 @@ type changesFeed struct {
 
 // queueChange adds a change ID to the current batch buffer and dispatches a
 // full batch when the buffer reaches capacity.
-func (cb *CloudantBackup) queueChange(change cloudantv1.ChangesResultItem) {
+func (cb *CloudantBackup) queueChange(ctx context.Context, change cloudantv1.ChangesResultItem) error {
 	if change.ID == nil {
-		return
+		return nil
 	}
 
 	cb.buffer[cb.bufferLen] = *change.ID
 	cb.bufferLen++
 
 	if cb.bufferLen == cb.appConfig.BufferSize {
-		cb.dispatchBatchToWorker()
+		return cb.dispatchBatchToWorker(ctx)
 	}
+	return nil
 }
 
 // SpoolChangesFeed reads the Cloudant _changes feed, batches document IDs, and
 // sends the batches to workers through jobsChan.
-func (cb *CloudantBackup) SpoolChangesFeed() error {
+func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 
 	// create a changes feed request
 	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
@@ -219,7 +225,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	}
 
 	for _, change := range feed.Results {
-		cb.queueChange(change)
+		if err := cb.queueChange(ctx, change); err != nil {
+			return err
+		}
 	}
 
 	if feed.LastSeq != "" {
@@ -229,7 +237,9 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 	// if there are still unprocessed changes in the buffer
 	if cb.bufferLen > 0 {
 		// send them to be processed
-		cb.dispatchBatchToWorker()
+		if err := cb.dispatchBatchToWorker(ctx); err != nil {
+			return err
+		}
 	}
 
 	// we're now finished consuming the changes feed
@@ -245,7 +255,7 @@ func (cb *CloudantBackup) SpoolChangesFeed() error {
 // Run executes the backup.
 // If Resume is enabled, pending batches are loaded from the log file.
 // Otherwise, batches are created from the _changes feed and processed by workers.
-func (cb *CloudantBackup) Run() error {
+func (cb *CloudantBackup) Run(ctx context.Context) error {
 
 	// don't forget to flush/close buffered output and log file
 	defer func() {
@@ -262,6 +272,9 @@ func (cb *CloudantBackup) Run() error {
 		}
 	}()
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// if we are to resume, load the old log file
 	var batchesToResume *[]Batch
 	var err error
@@ -275,12 +288,12 @@ func (cb *CloudantBackup) Run() error {
 	// Start worker pool
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
-		go cb.fetchDocsWorker()
+		go cb.fetchDocsWorker(ctx, cancel)
 	}
 
 	// spin up a goroutine to handle the results and errors
 	cb.wgCollector.Add(1)
-	go cb.statsCollector()
+	go cb.statsCollector(ctx, cancel)
 
 	// We need to either resume from the batches we found in the log file ...
 	if cb.appConfig.Resume {
@@ -288,23 +301,32 @@ func (cb *CloudantBackup) Run() error {
 		for _, batch := range *batchesToResume {
 			// update the log file
 			if err := cb.logFile.WriteNewBatch(&batch); err != nil {
+				cancel()
 				return err
 			}
 
 			// send it to a worker via the jobsChan
-			cb.jobsChan <- batch
+			select {
+			case <-ctx.Done():
+				close(cb.jobsChan)
+				cb.wgWorker.Wait()
+				close(cb.resultsChan)
+				cb.wgCollector.Wait()
+				return ctx.Err()
+			case cb.jobsChan <- batch:
+			}
 
 			// update counters
 			cb.changesCount += len(batch.docs)
 		}
 	} else {
 		// ... or spool the changes feed ...
-		err = cb.SpoolChangesFeed()
+		err = cb.SpoolChangesFeed(ctx)
 		if err != nil {
+			cancel()
 			close(cb.jobsChan)
 			cb.wgWorker.Wait()
 			close(cb.resultsChan)
-			close(cb.errorsChan)
 			cb.wgCollector.Wait()
 			return err
 		}
@@ -330,12 +352,23 @@ func (cb *CloudantBackup) Run() error {
 
 // fetchDocsWorker reads batches from jobsChan, fetches the documents from
 // Cloudant, and sends ResultSet values to resultsChan.
-func (cb *CloudantBackup) fetchDocsWorker() {
+func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.CancelFunc) {
 	// make sure we release our slot in the WaitGroup
 	defer cb.wgWorker.Done()
 
-	// wait for a job (a Batch struct) from the jobsChan
-	for job := range cb.jobsChan {
+	for {
+		var job Batch
+		var ok bool
+
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok = <-cb.jobsChan:
+			if !ok {
+				return
+			}
+		}
+
 		// formulate bulk docs request
 		postBulkGetOptions := cb.service.NewPostBulkGetOptions(cb.appConfig.DatabaseName, job.docs)
 		if cb.appConfig.Mode == ModeFull {
@@ -343,7 +376,11 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 		}
 		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
 		if err != nil {
-			cb.errorsChan <- err
+			cancel()
+			select {
+			case cb.errorsChan <- err:
+			default:
+			}
 			return
 		}
 		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
@@ -361,7 +398,11 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 		// with the number of documents fetched
 		b, err := json.Marshal(backupDocs)
 		if err != nil {
-			cb.errorsChan <- err
+			cancel()
+			select {
+			case cb.errorsChan <- err:
+			default:
+			}
 			return
 		}
 		rs := ResultSet{
@@ -369,27 +410,34 @@ func (cb *CloudantBackup) fetchDocsWorker() {
 			docCount: docCount,
 			batchId:  job.batchId,
 		}
-		cb.resultsChan <- rs
+		select {
+		case <-ctx.Done():
+			return
+		case cb.resultsChan <- rs:
+		}
 	}
 }
 
 // statsCollector writes the backup header and result batches, tracks the total
 // number of saved documents, and stops on the first error.
-func (cb *CloudantBackup) statsCollector() {
+func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.CancelFunc) {
 	defer cb.wgCollector.Done()
 	total := 0
 
 	// header line
 	if err := cb.output.WriteHeader(cb.appConfig.Mode); err != nil {
-		cb.errorsChan <- err
+		cancel()
+		select {
+		case cb.errorsChan <- err:
+		default:
+		}
 		return
 	}
 
 	for {
 		select {
-		// <- returns the value of the channel and boolean ok,
-		// that indicates whether the channel is open or not.
-		// If ok == false, we can return - nothing more to do
+		case <-ctx.Done():
+			return
 		case r, ok := <-cb.resultsChan:
 			if !ok {
 				return
@@ -400,23 +448,28 @@ func (cb *CloudantBackup) statsCollector() {
 
 			// write the output batch
 			if err := cb.output.WriteResult(r.result); err != nil {
-				cb.errorsChan <- err
+				cancel()
+				select {
+				case cb.errorsChan <- err:
+				default:
+				}
 				return
 			}
 
 			// update the log file
 			if cb.logFile != nil {
 				if err := cb.logFile.WriteDoneBatch(r.batchId); err != nil {
-					cb.errorsChan <- err
+					cancel()
+					select {
+					case cb.errorsChan <- err:
+					default:
+					}
 					return
 				}
 			}
 
 			// log the completion of this batch on stderr
 			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchId, r.docCount, total)
-
-		case <-cb.errorsChan:
-			return
 		}
 	}
 }
