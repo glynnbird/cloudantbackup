@@ -79,8 +79,8 @@ func TestSpoolChangesFeedDispatchesBatches(t *testing.T) {
 
 	select {
 	case batch := <-cb.jobsChan:
-		if batch.batchId != 1 {
-			t.Fatalf("expected batch id 1, got %d", batch.batchId)
+		if batch.batchID != 1 {
+			t.Fatalf("expected batch id 1, got %d", batch.batchID)
 		}
 		if len(batch.docs) != 2 {
 			t.Fatalf("expected 2 docs, got %d", len(batch.docs))
@@ -140,8 +140,8 @@ func TestFetchDocsWorkerWritesResult(t *testing.T) {
 
 	select {
 	case result := <-cb.resultsChan:
-		if result.batchId != 1 {
-			t.Fatalf("expected batch id 1, got %d", result.batchId)
+		if result.batchID != 1 {
+			t.Fatalf("expected batch id 1, got %d", result.batchID)
 		}
 		if result.docCount != 1 {
 			t.Fatalf("expected doc count 1, got %d", result.docCount)
@@ -173,7 +173,7 @@ func TestStatsCollectorWritesHeaderAndResults(t *testing.T) {
 	cb.resultsChan <- ResultSet{
 		result:   []byte(`[{"_id":"doc1"}]`),
 		docCount: 1,
-		batchId:  1,
+		batchID:  1,
 	}
 	close(cb.resultsChan)
 	cb.wgCollector.Wait()

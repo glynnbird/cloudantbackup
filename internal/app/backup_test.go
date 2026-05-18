@@ -12,7 +12,7 @@ func TestDispatchBatchToWorker(t *testing.T) {
 		jobsChan:     make(chan Batch, 1),
 		errorsChan:   make(chan error, 1),
 		changesCount: 0,
-		batchId:      4,
+		batchID:      4,
 	}
 	cb.buffer[0] = "doc1"
 	cb.buffer[1] = "doc2"
@@ -23,8 +23,8 @@ func TestDispatchBatchToWorker(t *testing.T) {
 
 	select {
 	case batch := <-cb.jobsChan:
-		if batch.batchId != 4 {
-			t.Fatalf("expected batch id 4, got %d", batch.batchId)
+		if batch.batchID != 4 {
+			t.Fatalf("expected batch id 4, got %d", batch.batchID)
 		}
 		if len(batch.docs) != 2 {
 			t.Fatalf("expected 2 docs, got %d", len(batch.docs))
@@ -39,8 +39,8 @@ func TestDispatchBatchToWorker(t *testing.T) {
 		t.Fatal("expected a batch to be dispatched")
 	}
 
-	if cb.batchId != 5 {
-		t.Fatalf("expected batch id to advance to 5, got %d", cb.batchId)
+	if cb.batchID != 5 {
+		t.Fatalf("expected batch id to advance to 5, got %d", cb.batchID)
 	}
 	if cb.changesCount != 2 {
 		t.Fatalf("expected changes count 2, got %d", cb.changesCount)
@@ -56,7 +56,7 @@ func TestDispatchBatchToWorkerEmptyBuffer(t *testing.T) {
 		bufferLen:  0,
 		jobsChan:   make(chan Batch, 1),
 		errorsChan: make(chan error, 1),
-		batchId:    9,
+		batchID:    9,
 	}
 
 	if err := cb.dispatchBatchToWorker(context.Background()); err != nil {
@@ -69,7 +69,7 @@ func TestDispatchBatchToWorkerEmptyBuffer(t *testing.T) {
 	default:
 	}
 
-	if cb.batchId != 9 {
-		t.Fatalf("expected batch id unchanged, got %d", cb.batchId)
+	if cb.batchID != 9 {
+		t.Fatalf("expected batch id unchanged, got %d", cb.batchID)
 	}
 }

@@ -25,7 +25,7 @@ type (
 	ResultSet struct {
 		result   []byte
 		docCount int
-		batchId  int
+		batchID  int
 	}
 
 	// CloudantBackup is the state that represents a backup process.
@@ -42,7 +42,7 @@ type (
 		errorsChan   chan error      // channel to carry errors that occurred when fetching documents from Cloudant
 		changesCount int             // the total number of changes fetched from the changes follower
 		logFile      *LogFile        // the log file, which is optionally written-to during the backup process
-		batchId      int             // the current batch id
+		batchID      int             // the current batch ID
 	}
 )
 
@@ -101,7 +101,7 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 		errorsChan:   make(chan error, appConfig.Parallelism+1),
 		changesCount: 0,
 		logFile:      logFile,
-		batchId:      1,
+		batchID:      1,
 	}
 
 	return &cb, nil
@@ -118,7 +118,7 @@ func (cb *CloudantBackup) dispatchBatchToWorker(ctx context.Context) error {
 	copy(clone, cb.buffer[:cb.bufferLen])
 
 	// create a new Batch struct
-	batch := NewBatch(cb.batchId, clone)
+	batch := NewBatch(cb.batchID, clone)
 
 	// log it
 	if cb.logFile != nil {
@@ -135,7 +135,7 @@ func (cb *CloudantBackup) dispatchBatchToWorker(ctx context.Context) error {
 	}
 
 	// update counters
-	cb.batchId++
+	cb.batchID++
 	cb.changesCount += cb.bufferLen
 	cb.bufferLen = 0
 	return nil
@@ -367,7 +367,7 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 		rs := ResultSet{
 			result:   b,
 			docCount: docCount,
-			batchId:  job.batchId,
+			batchID:  job.batchID,
 		}
 		select {
 		case <-ctx.Done():
@@ -417,7 +417,7 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 
 			// update the log file
 			if cb.logFile != nil {
-				if err := cb.logFile.WriteDoneBatch(r.batchId); err != nil {
+				if err := cb.logFile.WriteDoneBatch(r.batchID); err != nil {
 					cancel()
 					select {
 					case cb.errorsChan <- err:
@@ -428,7 +428,7 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 			}
 
 			// log the completion of this batch on stderr
-			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchId, r.docCount, total)
+			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchID, r.docCount, total)
 		}
 	}
 }

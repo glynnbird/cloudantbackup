@@ -50,8 +50,8 @@ func TestLogFileWriteAndLoadPendingBatches(t *testing.T) {
 	if len(batches) != 1 {
 		t.Fatalf("expected 1 pending batch, got %d", len(batches))
 	}
-	if batches[0].batchId != 2 {
-		t.Fatalf("expected pending batch id 2, got %d", batches[0].batchId)
+	if batches[0].batchID != 2 {
+		t.Fatalf("expected pending batch id 2, got %d", batches[0].batchID)
 	}
 	if len(batches[0].docs) != 1 {
 		t.Fatalf("expected 1 doc in pending batch, got %d", len(batches[0].docs))
@@ -146,8 +146,8 @@ func TestLogFileCloseNilHandle(t *testing.T) {
 func TestValidateLogState(t *testing.T) {
 	lf := &LogFile{}
 	batches := []Batch{
-		{batchId: 1},
-		{batchId: 2},
+		{batchID: 1},
+		{batchID: 2},
 	}
 
 	if err := lf.validateLogState(false, batches, map[int]bool{}); err == nil || err.Error() != "cannot resume - changes feed not complete" {
@@ -166,9 +166,9 @@ func TestValidateLogState(t *testing.T) {
 func TestFilterPendingBatches(t *testing.T) {
 	lf := &LogFile{}
 	batches := []Batch{
-		{batchId: 1},
-		{batchId: 2},
-		{batchId: 3},
+		{batchID: 1},
+		{batchID: 2},
+		{batchID: 3},
 	}
 
 	pending := lf.filterPendingBatches(batches, map[int]bool{
@@ -179,8 +179,8 @@ func TestFilterPendingBatches(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending batch, got %d", len(pending))
 	}
-	if pending[0].batchId != 2 {
-		t.Fatalf("expected pending batch id 2, got %d", pending[0].batchId)
+	if pending[0].batchID != 2 {
+		t.Fatalf("expected pending batch id 2, got %d", pending[0].batchID)
 	}
 }
 

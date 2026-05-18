@@ -5,8 +5,8 @@ import "testing"
 func TestNewBatch(t *testing.T) {
 	batch := NewBatch(7, []string{"doc1", "doc2"})
 
-	if batch.batchId != 7 {
-		t.Fatalf("expected batch id 7, got %d", batch.batchId)
+	if batch.batchID != 7 {
+		t.Fatalf("expected batch id 7, got %d", batch.batchID)
 	}
 	if len(batch.docs) != 2 {
 		t.Fatalf("expected 2 docs, got %d", len(batch.docs))
@@ -25,8 +25,8 @@ func TestNewBatchFromLogLine(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if batch.batchId != 56 {
-		t.Fatalf("expected batch id 56, got %d", batch.batchId)
+	if batch.batchID != 56 {
+		t.Fatalf("expected batch id 56, got %d", batch.batchID)
 	}
 	if len(batch.docs) != 2 {
 		t.Fatalf("expected 2 docs, got %d", len(batch.docs))

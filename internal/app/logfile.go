@@ -48,16 +48,16 @@ func NewLogFile(filename string) (*LogFile, error) {
 func (lf *LogFile) WriteNewBatch(batch *Batch) error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
-	_, err := fmt.Fprintf(lf.writer, "%v batch%v %v\n", toDoPrefix, batch.batchId, batch.ToLogString())
+	_, err := fmt.Fprintf(lf.writer, "%v batch%v %v\n", toDoPrefix, batch.batchID, batch.ToLogString())
 	return err
 }
 
 // WriteDoneBatch writes a ":d batchX" line to the log file to record that a
 // batch has been fetched successfully.
-func (lf *LogFile) WriteDoneBatch(batchId int) error {
+func (lf *LogFile) WriteDoneBatch(batchID int) error {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
-	_, err := fmt.Fprintf(lf.writer, "%v batch%d\n", donePrefix, batchId)
+	_, err := fmt.Fprintf(lf.writer, "%v batch%d\n", donePrefix, batchID)
 	return err
 }
 
@@ -98,16 +98,16 @@ func (lf *LogFile) Load(bufferSize int) ([]Batch, error) {
 	}
 	defer rc.Close()
 
-	batches, doneBatchIds, changesComplete, err := lf.parseLogFile(rc, bufferSize)
+	batches, doneBatchIDs, changesComplete, err := lf.parseLogFile(rc, bufferSize)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := lf.validateLogState(changesComplete, batches, doneBatchIds); err != nil {
+	if err := lf.validateLogState(changesComplete, batches, doneBatchIDs); err != nil {
 		return nil, err
 	}
 
-	batchesToDo := lf.filterPendingBatches(batches, doneBatchIds)
+	batchesToDo := lf.filterPendingBatches(batches, doneBatchIDs)
 	if len(batchesToDo) == 0 {
 		return nil, errors.New("cannot resume - all batches done")
 	}
@@ -120,7 +120,7 @@ func (lf *LogFile) Load(bufferSize int) ([]Batch, error) {
 func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]bool, bool, error) {
 	scanner := bufio.NewScanner(rc)
 	batches := make([]Batch, 0, 100)
-	doneBatchIds := make(map[int]bool)
+	doneBatchIDs := make(map[int]bool)
 	changesComplete := false
 
 	for scanner.Scan() {
@@ -133,12 +133,12 @@ func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]b
 			}
 			batches = append(batches, *batch)
 		} else if strings.HasPrefix(line, donePrefix) {
-			batchId, err := lf.processDoneLine(line)
+			batchID, err := lf.processDoneLine(line)
 			if err != nil {
 				return nil, nil, false, err
 			}
-			if batchId >= 0 {
-				doneBatchIds[batchId] = true
+			if batchID >= 0 {
+				doneBatchIDs[batchID] = true
 			}
 		} else if strings.HasPrefix(line, changesCompletePrefix) {
 			changesComplete = true
@@ -149,7 +149,7 @@ func (lf *LogFile) parseLogFile(rc *os.File, bufferSize int) ([]Batch, map[int]b
 		return nil, nil, false, err
 	}
 
-	return batches, doneBatchIds, changesComplete, nil
+	return batches, doneBatchIDs, changesComplete, nil
 }
 
 // processTodoLine parses a todo log line into a Batch.
@@ -169,20 +169,20 @@ func (lf *LogFile) processDoneLine(line string) (int, error) {
 		return -1, nil
 	}
 
-	batchId, err := strconv.Atoi(matches[1])
+	batchID, err := strconv.Atoi(matches[1])
 	if err != nil {
 		return -1, err
 	}
-	return batchId, nil
+	return batchID, nil
 }
 
 // validateLogState checks that the log contains enough information to resume safely.
-func (lf *LogFile) validateLogState(changesComplete bool, batches []Batch, doneBatchIds map[int]bool) error {
+func (lf *LogFile) validateLogState(changesComplete bool, batches []Batch, doneBatchIDs map[int]bool) error {
 	if !changesComplete {
 		return errors.New("cannot resume - changes feed not complete")
 	}
 
-	if len(batches) <= len(doneBatchIds) {
+	if len(batches) <= len(doneBatchIDs) {
 		return errors.New("cannot resume - more batches done than exist")
 	}
 
@@ -190,10 +190,10 @@ func (lf *LogFile) validateLogState(changesComplete bool, batches []Batch, doneB
 }
 
 // filterPendingBatches removes batches that have already been marked done.
-func (lf *LogFile) filterPendingBatches(batches []Batch, doneBatchIds map[int]bool) []Batch {
-	batchesToDo := make([]Batch, 0, len(batches)-len(doneBatchIds))
+func (lf *LogFile) filterPendingBatches(batches []Batch, doneBatchIDs map[int]bool) []Batch {
+	batchesToDo := make([]Batch, 0, len(batches)-len(doneBatchIDs))
 	for _, batch := range batches {
-		if !doneBatchIds[batch.batchId] {
+		if !doneBatchIDs[batch.batchID] {
 			batchesToDo = append(batchesToDo, batch)
 		}
 	}

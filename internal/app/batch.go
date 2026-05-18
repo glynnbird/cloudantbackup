@@ -13,14 +13,14 @@ import (
 // Each batch has an ID and a slice of BulkGetQueryDocument values that can be
 // passed directly to the bulk get API.
 type Batch struct {
-	batchId int
+	batchID int
 	docs    []cloudantv1.BulkGetQueryDocument
 }
 
 // NewBatch creates a batch from its ID and a slice of document IDs.
-func NewBatch(batchId int, buffer []string) *Batch {
+func NewBatch(batchID int, buffer []string) *Batch {
 	batch := Batch{
-		batchId: batchId,
+		batchID: batchID,
 		docs:    make([]cloudantv1.BulkGetQueryDocument, len(buffer)),
 	}
 	for i := range buffer {
@@ -42,8 +42,8 @@ func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 	matches := re.FindStringSubmatch(logLine)
 	if len(matches) == 3 {
 
-		// extract the batch id
-		batchId, err := strconv.Atoi(matches[1])
+		// extract the batch ID
+		batchID, err := strconv.Atoi(matches[1])
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +57,7 @@ func NewBatchFromLogLine(logLine string, bufferSize int) (*Batch, error) {
 
 		// create batch
 		batch := Batch{
-			batchId: batchId,
+			batchID: batchID,
 			docs:    docs,
 		}
 		return &batch, nil
