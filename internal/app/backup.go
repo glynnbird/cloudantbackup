@@ -13,6 +13,11 @@ import (
 	"github.com/IBM/go-sdk-core/v5/core"
 )
 
+const (
+	changesFeedMaxRetries     = 5
+	changesFeedInitialBackoff = 1 * time.Second
+)
+
 type (
 	cloudantService interface {
 		PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
@@ -166,31 +171,45 @@ func (cb *CloudantBackup) queueChange(ctx context.Context, change cloudantv1.Cha
 // SpoolChangesFeed reads the Cloudant _changes feed, batches document IDs, and
 // sends the batches to workers through jobsChan.
 func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
+	since := cb.appConfig.Since
+	retries := 0
+	backoff := changesFeedInitialBackoff
 
-	// create a changes feed request
-	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince(cb.appConfig.Since)
-	postChangesOptions.SetIncludeDocs(false)
-	postChangesOptions.SetSeqInterval(500)
-	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
-	if err != nil {
-		return err
-	}
+	for {
+		feed, err := cb.loadChangesFeed(since)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				if retries >= changesFeedMaxRetries {
+					return err
+				}
 
-	decoder := json.NewDecoder(stream)
-	var feed changesFeed
-	if err := decoder.Decode(&feed); err != nil {
-		return err
-	}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(backoff):
+				}
 
-	for _, change := range feed.Results {
-		if err := cb.queueChange(ctx, change); err != nil {
+				retries++
+				backoff *= 2
+				continue
+			}
 			return err
 		}
-	}
 
-	if feed.LastSeq != "" {
-		log.Printf("lastseq %v", feed.LastSeq)
+		for _, change := range feed.Results {
+			if change.Seq != nil {
+				since = *change.Seq
+			}
+
+			if err := cb.queueChange(ctx, change); err != nil {
+				return err
+			}
+		}
+
+		if feed.LastSeq != "" {
+			log.Printf("lastseq %v", feed.LastSeq)
+			break
+		}
 	}
 
 	// if there are still unprocessed changes in the buffer
@@ -209,6 +228,26 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (cb *CloudantBackup) loadChangesFeed(since string) (*changesFeed, error) {
+	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
+	postChangesOptions.SetSince(since)
+	postChangesOptions.SetIncludeDocs(false)
+	postChangesOptions.SetSeqInterval(500)
+
+	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+
+	decoder := json.NewDecoder(stream)
+	var feed changesFeed
+	if err := decoder.Decode(&feed); err != nil {
+		return nil, err
+	}
+	return &feed, nil
 }
 
 // Run executes the backup.

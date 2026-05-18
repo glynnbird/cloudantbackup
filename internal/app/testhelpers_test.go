@@ -7,15 +7,36 @@ import (
 	"github.com/IBM/go-sdk-core/v5/core"
 )
 
-type fakeCloudantService struct {
-	changesStream io.ReadCloser
-	changesErr    error
-	bulkGetResult *cloudantv1.BulkGetResult
-	bulkGetErr    error
-	lastBulkDocs  []cloudantv1.BulkGetQueryDocument
+type fakeChangesResponse struct {
+	stream io.ReadCloser
+	err    error
 }
 
-func (f *fakeCloudantService) PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error) {
+type fakeCloudantService struct {
+	changesStream    io.ReadCloser
+	changesErr       error
+	changesResponses []fakeChangesResponse
+	changesCalls     int
+	lastChangesSince []string
+	bulkGetResult    *cloudantv1.BulkGetResult
+	bulkGetErr       error
+	lastBulkDocs     []cloudantv1.BulkGetQueryDocument
+}
+
+func (f *fakeCloudantService) PostChangesAsStream(opts *cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error) {
+	if opts != nil && opts.Since != nil {
+		f.lastChangesSince = append(f.lastChangesSince, *opts.Since)
+	} else {
+		f.lastChangesSince = append(f.lastChangesSince, "")
+	}
+
+	if f.changesCalls < len(f.changesResponses) {
+		response := f.changesResponses[f.changesCalls]
+		f.changesCalls++
+		return response.stream, nil, response.err
+	}
+
+	f.changesCalls++
 	return f.changesStream, nil, f.changesErr
 }
 
