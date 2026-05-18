@@ -37,6 +37,7 @@ type (
 	ResultSet struct {
 		result   []byte
 		docCount int
+		errCount int
 		batchID  int
 	}
 
@@ -382,11 +383,14 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 		}
 		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
 		docCount := 0
+		errCount := 0
 		for _, result := range bulkGetResult.Results {
 			for _, doc := range result.Docs {
 				if doc.Error == nil {
 					backupDocs = append(backupDocs, *doc.Ok)
 					docCount++
+				} else {
+					errCount++
 				}
 			}
 		}
@@ -401,6 +405,7 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 		rs := ResultSet{
 			result:   b,
 			docCount: docCount,
+			errCount: errCount,
 			batchID:  job.batchID,
 		}
 		select {
@@ -415,7 +420,8 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 // number of saved documents, and stops on the first error.
 func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.CancelFunc) {
 	defer cb.wgCollector.Done()
-	total := 0
+	totalDocs := 0
+	totalErrors := 0
 
 	// header line
 	if err := cb.output.WriteHeader(cb.appConfig.Mode); err != nil {
@@ -433,7 +439,8 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 			}
 
 			// increment docCount
-			total += r.docCount
+			totalDocs += r.docCount
+			totalErrors += r.errCount
 
 			// write the output batch
 			if err := cb.output.WriteResult(r.result); err != nil {
@@ -450,7 +457,7 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 			}
 
 			// log the completion of this batch on stderr
-			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchID, r.docCount, total)
+			log.Printf("Batch %d: saved %d docs, %d errors. Total docs: %d Total errors: %d\n", r.batchID, r.docCount, r.errCount, totalDocs, totalErrors)
 		}
 	}
 }
