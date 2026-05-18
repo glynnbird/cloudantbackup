@@ -313,6 +313,14 @@ func (cb *CloudantBackup) finalError() error {
 	}
 }
 
+func (cb *CloudantBackup) cancelWithError(cancel context.CancelFunc, err error) {
+	cancel()
+	select {
+	case cb.errorsChan <- err:
+	default:
+	}
+}
+
 // fetchDocsWorker reads batches from jobsChan, fetches the documents from
 // Cloudant, and sends ResultSet values to resultsChan.
 func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.CancelFunc) {
@@ -339,11 +347,7 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 		}
 		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
 		if err != nil {
-			cancel()
-			select {
-			case cb.errorsChan <- err:
-			default:
-			}
+			cb.cancelWithError(cancel, err)
 			return
 		}
 		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
@@ -361,11 +365,7 @@ func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.Ca
 		// with the number of documents fetched
 		b, err := json.Marshal(backupDocs)
 		if err != nil {
-			cancel()
-			select {
-			case cb.errorsChan <- err:
-			default:
-			}
+			cb.cancelWithError(cancel, err)
 			return
 		}
 		rs := ResultSet{
@@ -389,11 +389,7 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 
 	// header line
 	if err := cb.output.WriteHeader(cb.appConfig.Mode); err != nil {
-		cancel()
-		select {
-		case cb.errorsChan <- err:
-		default:
-		}
+		cb.cancelWithError(cancel, err)
 		return
 	}
 
@@ -411,22 +407,14 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 
 			// write the output batch
 			if err := cb.output.WriteResult(r.result); err != nil {
-				cancel()
-				select {
-				case cb.errorsChan <- err:
-				default:
-				}
+				cb.cancelWithError(cancel, err)
 				return
 			}
 
 			// update the log file
 			if cb.logFile != nil {
 				if err := cb.logFile.WriteDoneBatch(r.batchID); err != nil {
-					cancel()
-					select {
-					case cb.errorsChan <- err:
-					default:
-					}
+					cb.cancelWithError(cancel, err)
 					return
 				}
 			}
