@@ -35,5 +35,3 @@ func TestStdoutOutputWriterFlushNilWriter(t *testing.T) {
 		t.Fatalf("expected nil flush error, got %v", err)
 	}
 }
-
-// Made with Bob

@@ -43,5 +43,3 @@ func (w *stdoutOutputWriter) Flush() error {
 	}
 	return w.writer.Flush()
 }
-
-// Made with Bob

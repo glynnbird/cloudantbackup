@@ -81,5 +81,3 @@ func (f *fakeOutputWriter) WriteResult(result []byte) error {
 	f.results = append(f.results, append([]byte(nil), result...))
 	return nil
 }
-
-// Made with Bob
