@@ -235,7 +235,7 @@ func (cb *CloudantBackup) Run(ctx context.Context) error {
 	defer cancel()
 
 	// if we are to resume, load the old log file
-	var batchesToResume *[]Batch
+	var batchesToResume []Batch
 	var err error
 	if cb.appConfig.Resume {
 		batchesToResume, err = cb.logFile.Load(cb.appConfig.BufferSize)
@@ -256,8 +256,8 @@ func (cb *CloudantBackup) Run(ctx context.Context) error {
 
 	// We need to either resume from the batches we found in the log file ...
 	if cb.appConfig.Resume {
-		log.Printf("Resuming: %v batches", len(*batchesToResume))
-		for _, batch := range *batchesToResume {
+		log.Printf("Resuming: %v batches", len(batchesToResume))
+		for _, batch := range batchesToResume {
 			// update the log file
 			if err := cb.logFile.WriteNewBatch(&batch); err != nil {
 				cancel()

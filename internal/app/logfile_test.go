@@ -47,17 +47,17 @@ func TestLogFileWriteAndLoadPendingBatches(t *testing.T) {
 		t.Fatalf("unexpected error loading logfile: %v", err)
 	}
 
-	if len(*batches) != 1 {
-		t.Fatalf("expected 1 pending batch, got %d", len(*batches))
+	if len(batches) != 1 {
+		t.Fatalf("expected 1 pending batch, got %d", len(batches))
 	}
-	if (*batches)[0].batchId != 2 {
-		t.Fatalf("expected pending batch id 2, got %d", (*batches)[0].batchId)
+	if batches[0].batchId != 2 {
+		t.Fatalf("expected pending batch id 2, got %d", batches[0].batchId)
 	}
-	if len((*batches)[0].docs) != 1 {
-		t.Fatalf("expected 1 doc in pending batch, got %d", len((*batches)[0].docs))
+	if len(batches[0].docs) != 1 {
+		t.Fatalf("expected 1 doc in pending batch, got %d", len(batches[0].docs))
 	}
-	if (*batches)[0].docs[0].ID == nil || *(*batches)[0].docs[0].ID != "c" {
-		t.Fatalf("expected pending doc id c, got %#v", (*batches)[0].docs[0].ID)
+	if batches[0].docs[0].ID == nil || *batches[0].docs[0].ID != "c" {
+		t.Fatalf("expected pending doc id c, got %#v", batches[0].docs[0].ID)
 	}
 }
 

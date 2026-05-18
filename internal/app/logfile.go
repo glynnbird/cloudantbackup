@@ -91,7 +91,7 @@ func (lf *LogFile) Close() error {
 
 // Load parses a previously saved log file and returns the batches that still
 // need to be fetched.
-func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
+func (lf *LogFile) Load(bufferSize int) ([]Batch, error) {
 	rc, err := os.Open(lf.filename)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (lf *LogFile) Load(bufferSize int) (*[]Batch, error) {
 		return nil, errors.New("cannot resume - all batches done")
 	}
 
-	return &batchesToDo, nil
+	return batchesToDo, nil
 }
 
 // parseLogFile reads log lines and returns discovered batches, completed batch
