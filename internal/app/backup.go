@@ -17,14 +17,17 @@ import (
 const changesFeedSeqInterval = 500
 
 type (
+	// changesFollower yields one change at a time from the changes feed.
 	changesFollower interface {
 		Next() (cloudantv1.ChangesResultItem, error)
 	}
 
+	// changesFollowerFactory creates a follower positioned at a starting sequence.
 	changesFollowerFactory interface {
 		New(ctx context.Context, since string) (changesFollower, error)
 	}
 
+	// cloudantService defines the subset of the Cloudant client used for bulk fetches.
 	cloudantService interface {
 		NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
 		PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
@@ -79,6 +82,8 @@ func New() (*CloudantBackup, error) {
 	return NewWithDeps(appConfig, service, newSDKChangesFollowerFactory(service, appConfig.DatabaseName), newStdoutOutputWriter())
 }
 
+// NewWithDeps creates a CloudantBackup with injected dependencies for testing
+// or custom wiring.
 func NewWithDeps(appConfig *AppConfig, service cloudantService, changesFollowerFactory changesFollowerFactory, output outputWriter) (*CloudantBackup, error) {
 	// create the buffer
 	buffer := make([]string, appConfig.BufferSize)
@@ -200,6 +205,8 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 	return nil
 }
 
+// followChangesFeed consumes the one-off changes follower until completion and
+// returns the last non-nil sequence observed.
 func (cb *CloudantBackup) followChangesFeed(ctx context.Context, since string) (string, error) {
 	follower, err := cb.changesFollowerFactory.New(ctx, since)
 	if err != nil {
@@ -250,6 +257,7 @@ func (cb *CloudantBackup) Run(ctx context.Context) error {
 	return cb.finalError()
 }
 
+// closeResources flushes and closes optional output resources.
 func (cb *CloudantBackup) closeResources() {
 	if flusher, ok := cb.output.(interface{ Flush() error }); ok {
 		if err := flusher.Flush(); err != nil {
@@ -264,6 +272,7 @@ func (cb *CloudantBackup) closeResources() {
 	}
 }
 
+// loadResumeBatches loads pending batches from the log file when resume mode is enabled.
 func (cb *CloudantBackup) loadResumeBatches() ([]Batch, error) {
 	if !cb.appConfig.Resume {
 		return nil, nil
@@ -271,6 +280,7 @@ func (cb *CloudantBackup) loadResumeBatches() ([]Batch, error) {
 	return cb.logFile.Load(cb.appConfig.BufferSize)
 }
 
+// startWorkers launches fetch workers and the result collector.
 func (cb *CloudantBackup) startWorkers(ctx context.Context, cancel context.CancelFunc) {
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
@@ -281,6 +291,7 @@ func (cb *CloudantBackup) startWorkers(ctx context.Context, cancel context.Cance
 	go cb.statsCollector(ctx, cancel)
 }
 
+// shutdownWorkers closes worker channels and waits for all goroutines to exit.
 func (cb *CloudantBackup) shutdownWorkers() {
 	close(cb.jobsChan)
 	cb.wgWorker.Wait()
@@ -288,6 +299,7 @@ func (cb *CloudantBackup) shutdownWorkers() {
 	cb.wgCollector.Wait()
 }
 
+// produceBatches either resumes pending work or spools fresh changes.
 func (cb *CloudantBackup) produceBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
 	if cb.appConfig.Resume {
 		return cb.resumeBatches(ctx, cancel, batchesToResume)
@@ -300,6 +312,7 @@ func (cb *CloudantBackup) produceBatches(ctx context.Context, cancel context.Can
 	return nil
 }
 
+// resumeBatches re-enqueues batches loaded from the resume log.
 func (cb *CloudantBackup) resumeBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
 	log.Printf("Resuming: %v batches", len(batchesToResume))
 	for _, batch := range batchesToResume {
@@ -319,6 +332,7 @@ func (cb *CloudantBackup) resumeBatches(ctx context.Context, cancel context.Canc
 	return nil
 }
 
+// finalError returns the first asynchronously reported worker or collector error, if any.
 func (cb *CloudantBackup) finalError() error {
 	select {
 	case err := <-cb.errorsChan:
@@ -328,6 +342,7 @@ func (cb *CloudantBackup) finalError() error {
 	}
 }
 
+// cancelWithError cancels the pipeline and attempts to publish the triggering error.
 func (cb *CloudantBackup) cancelWithError(cancel context.CancelFunc, err error) {
 	cancel()
 	select {
@@ -440,13 +455,16 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 	}
 }
 
+// ErrNilChangesFollowerFactory indicates that no changes follower factory was provided.
 var ErrNilChangesFollowerFactory = io.ErrClosedPipe
 
+// sdkChangesFollowerFactory builds SDK-backed one-off changes followers.
 type sdkChangesFollowerFactory struct {
 	service *cloudantv1.CloudantV1
 	dbName  string
 }
 
+// newSDKChangesFollowerFactory creates a changes follower factory backed by the Cloudant SDK.
 func newSDKChangesFollowerFactory(service *cloudantv1.CloudantV1, dbName string) changesFollowerFactory {
 	return &sdkChangesFollowerFactory{
 		service: service,
@@ -473,6 +491,7 @@ func (f *sdkChangesFollowerFactory) New(ctx context.Context, since string) (chan
 	return &sdkChangesFollower{changesCh: changesCh}, nil
 }
 
+// sdkChangesFollower adapts the SDK changes channel to the local follower interface.
 type sdkChangesFollower struct {
 	changesCh <-chan features.ChangesItem
 }
