@@ -20,9 +20,7 @@ type (
 		NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
 		PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
 	}
-)
 
-type (
 	// ResultSet is the data sent back from the fetchDocsWorker on the resultsChan channel
 	ResultSet struct {
 		result   []byte
