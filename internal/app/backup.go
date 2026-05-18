@@ -215,92 +215,96 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 // If Resume is enabled, pending batches are loaded from the log file.
 // Otherwise, batches are created from the _changes feed and processed by workers.
 func (cb *CloudantBackup) Run(ctx context.Context) error {
-
-	// don't forget to flush/close buffered output and log file
-	defer func() {
-		if flusher, ok := cb.output.(interface{ Flush() error }); ok {
-			if err := flusher.Flush(); err != nil {
-				log.Printf("error flushing output: %v", err)
-			}
-		}
-
-		if cb.logFile != nil {
-			if err := cb.logFile.Close(); err != nil {
-				log.Printf("error closing log file: %v", err)
-			}
-		}
-	}()
+	defer cb.closeResources()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// if we are to resume, load the old log file
-	var batchesToResume []Batch
-	var err error
-	if cb.appConfig.Resume {
-		batchesToResume, err = cb.logFile.Load(cb.appConfig.BufferSize)
-		if err != nil {
-			return err
+	batchesToResume, err := cb.loadResumeBatches()
+	if err != nil {
+		return err
+	}
+
+	cb.startWorkers(ctx, cancel)
+	defer cb.shutdownWorkers()
+
+	if err := cb.produceBatches(ctx, cancel, batchesToResume); err != nil {
+		return err
+	}
+
+	return cb.finalError()
+}
+
+func (cb *CloudantBackup) closeResources() {
+	if flusher, ok := cb.output.(interface{ Flush() error }); ok {
+		if err := flusher.Flush(); err != nil {
+			log.Printf("error flushing output: %v", err)
 		}
 	}
 
-	// Start worker pool
+	if cb.logFile != nil {
+		if err := cb.logFile.Close(); err != nil {
+			log.Printf("error closing log file: %v", err)
+		}
+	}
+}
+
+func (cb *CloudantBackup) loadResumeBatches() ([]Batch, error) {
+	if !cb.appConfig.Resume {
+		return nil, nil
+	}
+	return cb.logFile.Load(cb.appConfig.BufferSize)
+}
+
+func (cb *CloudantBackup) startWorkers(ctx context.Context, cancel context.CancelFunc) {
 	for i := 0; i < cb.appConfig.Parallelism; i++ {
 		cb.wgWorker.Add(1)
 		go cb.fetchDocsWorker(ctx, cancel)
 	}
 
-	// spin up a goroutine to handle the results and errors
 	cb.wgCollector.Add(1)
 	go cb.statsCollector(ctx, cancel)
+}
 
-	// We need to either resume from the batches we found in the log file ...
-	if cb.appConfig.Resume {
-		log.Printf("Resuming: %v batches", len(batchesToResume))
-		for _, batch := range batchesToResume {
-			// update the log file
-			if err := cb.logFile.WriteNewBatch(&batch); err != nil {
-				cancel()
-				return err
-			}
-
-			// send it to a worker via the jobsChan
-			select {
-			case <-ctx.Done():
-				close(cb.jobsChan)
-				cb.wgWorker.Wait()
-				close(cb.resultsChan)
-				cb.wgCollector.Wait()
-				return ctx.Err()
-			case cb.jobsChan <- batch:
-			}
-
-			// update counters
-			cb.changesCount += len(batch.docs)
-		}
-	} else {
-		// ... or spool the changes feed ...
-		err = cb.SpoolChangesFeed(ctx)
-		if err != nil {
-			cancel()
-			close(cb.jobsChan)
-			cb.wgWorker.Wait()
-			close(cb.resultsChan)
-			cb.wgCollector.Wait()
-			return err
-		}
-	}
-
-	// we can close the jobsChan which will kill the workers in time
+func (cb *CloudantBackup) shutdownWorkers() {
 	close(cb.jobsChan)
-
-	// wait for the in-flight worker goroutines to complete
 	cb.wgWorker.Wait()
-
-	// wait for the collector to finish
 	close(cb.resultsChan)
 	cb.wgCollector.Wait()
+}
 
+func (cb *CloudantBackup) produceBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
+	if cb.appConfig.Resume {
+		return cb.resumeBatches(ctx, cancel, batchesToResume)
+	}
+
+	if err := cb.SpoolChangesFeed(ctx); err != nil {
+		cancel()
+		return err
+	}
+	return nil
+}
+
+func (cb *CloudantBackup) resumeBatches(ctx context.Context, cancel context.CancelFunc, batchesToResume []Batch) error {
+	log.Printf("Resuming: %v batches", len(batchesToResume))
+	for _, batch := range batchesToResume {
+		if err := cb.logFile.WriteNewBatch(&batch); err != nil {
+			cancel()
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case cb.jobsChan <- batch:
+		}
+
+		cb.changesCount += len(batch.docs)
+	}
+	return nil
+}
+
+func (cb *CloudantBackup) finalError() error {
 	select {
 	case err := <-cb.errorsChan:
 		return err
