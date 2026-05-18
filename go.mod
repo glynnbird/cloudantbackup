@@ -2,10 +2,12 @@ module github.com/glynnbird/cloudantbackup
 
 go 1.26
 
-require github.com/IBM/cloudant-go-sdk v0.10.13
+require (
+	github.com/IBM/cloudant-go-sdk v0.10.13
+	github.com/IBM/go-sdk-core/v5 v5.21.2
+)
 
 require (
-	github.com/IBM/go-sdk-core/v5 v5.21.2 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-openapi/errors v0.22.7 // indirect
 	github.com/go-openapi/strfmt v0.26.1 // indirect
