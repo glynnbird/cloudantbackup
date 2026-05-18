@@ -10,18 +10,22 @@ import (
 	"time"
 
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
+	"github.com/IBM/cloudant-go-sdk/features"
 	"github.com/IBM/go-sdk-core/v5/core"
 )
 
-const (
-	changesFeedMaxRetries     = 5
-	changesFeedInitialBackoff = 1 * time.Second
-)
+const changesFeedSeqInterval = 500
 
 type (
+	changesFollower interface {
+		Next() (cloudantv1.ChangesResultItem, error)
+	}
+
+	changesFollowerFactory interface {
+		New(ctx context.Context, since string) (changesFollower, error)
+	}
+
 	cloudantService interface {
-		PostChangesAsStream(*cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error)
-		NewPostChangesOptions(string) *cloudantv1.PostChangesOptions
 		NewPostBulkGetOptions(string, []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions
 		PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error)
 	}
@@ -35,19 +39,20 @@ type (
 
 	// CloudantBackup is the state that represents a backup process.
 	CloudantBackup struct {
-		appConfig    *AppConfig      // the command-line options
-		service      cloudantService // the Cloudant SDK client
-		output       outputWriter    // where backup output is written
-		buffer       []string        // a batch of document ids to fetch
-		bufferLen    int             // the current position in the buffer
-		wgWorker     sync.WaitGroup  // WaitGroup to keep track of running worker goroutines
-		wgCollector  sync.WaitGroup  // WaitGroup to keep track of the results collector
-		resultsChan  chan ResultSet  // channel to carry results of API calls
-		jobsChan     chan Batch      // channel to carry jobs, which uses the Batch type
-		errorsChan   chan error      // channel to carry errors that occurred when fetching documents from Cloudant
-		changesCount int             // the total number of changes fetched from the changes follower
-		logFile      *LogFile        // the log file, which is optionally written-to during the backup process
-		batchID      int             // the current batch ID
+		appConfig              *AppConfig             // the command-line options
+		service                cloudantService        // the Cloudant SDK client
+		changesFollowerFactory changesFollowerFactory // creates changes followers
+		output                 outputWriter           // where backup output is written
+		buffer                 []string               // a batch of document ids to fetch
+		bufferLen              int                    // the current position in the buffer
+		wgWorker               sync.WaitGroup         // WaitGroup to keep track of running worker goroutines
+		wgCollector            sync.WaitGroup         // WaitGroup to keep track of the results collector
+		resultsChan            chan ResultSet         // channel to carry results of API calls
+		jobsChan               chan Batch             // channel to carry jobs, which uses the Batch type
+		errorsChan             chan error             // channel to carry errors that occurred when fetching documents from Cloudant
+		changesCount           int                    // the total number of changes fetched from the changes follower
+		logFile                *LogFile               // the log file, which is optionally written-to during the backup process
+		batchID                int                    // the current batch ID
 	}
 )
 
@@ -71,10 +76,10 @@ func New() (*CloudantBackup, error) {
 	header.Add("user-agent", "couchbackup-cloudant/1.0 (Go)")
 	service.SetDefaultHeaders(header)
 
-	return NewWithDeps(appConfig, service, newStdoutOutputWriter())
+	return NewWithDeps(appConfig, service, newSDKChangesFollowerFactory(service, appConfig.DatabaseName), newStdoutOutputWriter())
 }
 
-func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWriter) (*CloudantBackup, error) {
+func NewWithDeps(appConfig *AppConfig, service cloudantService, changesFollowerFactory changesFollowerFactory, output outputWriter) (*CloudantBackup, error) {
 	// create the buffer
 	buffer := make([]string, appConfig.BufferSize)
 
@@ -88,25 +93,30 @@ func NewWithDeps(appConfig *AppConfig, service cloudantService, output outputWri
 		}
 	}
 
+	if changesFollowerFactory == nil {
+		return nil, ErrNilChangesFollowerFactory
+	}
+
 	if output == nil {
 		output = newStdoutOutputWriter()
 	}
 
 	// create struct
 	cb := CloudantBackup{
-		appConfig:    appConfig,
-		service:      service,
-		output:       output,
-		buffer:       buffer,
-		bufferLen:    0,
-		wgWorker:     sync.WaitGroup{},
-		wgCollector:  sync.WaitGroup{},
-		resultsChan:  make(chan ResultSet, appConfig.Parallelism),
-		jobsChan:     make(chan Batch, appConfig.Parallelism),
-		errorsChan:   make(chan error, appConfig.Parallelism+1),
-		changesCount: 0,
-		logFile:      logFile,
-		batchID:      1,
+		appConfig:              appConfig,
+		service:                service,
+		changesFollowerFactory: changesFollowerFactory,
+		output:                 output,
+		buffer:                 buffer,
+		bufferLen:              0,
+		wgWorker:               sync.WaitGroup{},
+		wgCollector:            sync.WaitGroup{},
+		resultsChan:            make(chan ResultSet, appConfig.Parallelism),
+		jobsChan:               make(chan Batch, appConfig.Parallelism),
+		errorsChan:             make(chan error, appConfig.Parallelism+1),
+		changesCount:           0,
+		logFile:                logFile,
+		batchID:                1,
 	}
 
 	return &cb, nil
@@ -146,12 +156,6 @@ func (cb *CloudantBackup) dispatchBatchToWorker(ctx context.Context) error {
 	return nil
 }
 
-// changesFeed models the subset of the Cloudant _changes response used by the backup.
-type changesFeed struct {
-	Results []cloudantv1.ChangesResultItem `json:"results"`
-	LastSeq string                         `json:"last_seq"`
-}
-
 // queueChange adds a change ID to the current batch buffer and dispatches a
 // full batch when the buffer reaches capacity.
 func (cb *CloudantBackup) queueChange(ctx context.Context, change cloudantv1.ChangesResultItem) error {
@@ -171,46 +175,12 @@ func (cb *CloudantBackup) queueChange(ctx context.Context, change cloudantv1.Cha
 // SpoolChangesFeed reads the Cloudant _changes feed, batches document IDs, and
 // sends the batches to workers through jobsChan.
 func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
-	since := cb.appConfig.Since
-	retries := 0
-	backoff := changesFeedInitialBackoff
-
-	for {
-		feed, err := cb.loadChangesFeed(since)
-		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				if retries >= changesFeedMaxRetries {
-					return err
-				}
-
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(backoff):
-				}
-
-				retries++
-				backoff *= 2
-				continue
-			}
-			return err
-		}
-
-		for _, change := range feed.Results {
-			if change.Seq != nil {
-				since = *change.Seq
-			}
-
-			if err := cb.queueChange(ctx, change); err != nil {
-				return err
-			}
-		}
-
-		if feed.LastSeq != "" {
-			log.Printf("lastseq %v", feed.LastSeq)
-			break
-		}
+	since, err := cb.followChangesFeed(ctx, cb.appConfig.Since)
+	if err != nil {
+		return err
 	}
+
+	log.Printf("lastseq %v", since)
 
 	// if there are still unprocessed changes in the buffer
 	if cb.bufferLen > 0 {
@@ -230,24 +200,30 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) error {
 	return nil
 }
 
-func (cb *CloudantBackup) loadChangesFeed(since string) (*changesFeed, error) {
-	postChangesOptions := cb.service.NewPostChangesOptions(cb.appConfig.DatabaseName)
-	postChangesOptions.SetSince(since)
-	postChangesOptions.SetIncludeDocs(false)
-	postChangesOptions.SetSeqInterval(500)
-
-	stream, _, err := cb.service.PostChangesAsStream(postChangesOptions)
+func (cb *CloudantBackup) followChangesFeed(ctx context.Context, since string) (string, error) {
+	follower, err := cb.changesFollowerFactory.New(ctx, since)
 	if err != nil {
-		return nil, err
+		return since, err
 	}
-	defer stream.Close()
 
-	decoder := json.NewDecoder(stream)
-	var feed changesFeed
-	if err := decoder.Decode(&feed); err != nil {
-		return nil, err
+	currentSince := since
+	for {
+		change, err := follower.Next()
+		if err != nil {
+			if err == io.EOF {
+				return currentSince, nil
+			}
+			return currentSince, err
+		}
+
+		if change.Seq != nil {
+			currentSince = *change.Seq
+		}
+
+		if err := cb.queueChange(ctx, change); err != nil {
+			return currentSince, err
+		}
 	}
-	return &feed, nil
 }
 
 // Run executes the backup.
@@ -462,4 +438,50 @@ func (cb *CloudantBackup) statsCollector(ctx context.Context, cancel context.Can
 			log.Printf("Batch %d: saved %d docs. Total: %d\n", r.batchID, r.docCount, total)
 		}
 	}
+}
+
+var ErrNilChangesFollowerFactory = io.ErrClosedPipe
+
+type sdkChangesFollowerFactory struct {
+	service *cloudantv1.CloudantV1
+	dbName  string
+}
+
+func newSDKChangesFollowerFactory(service *cloudantv1.CloudantV1, dbName string) changesFollowerFactory {
+	return &sdkChangesFollowerFactory{
+		service: service,
+		dbName:  dbName,
+	}
+}
+
+func (f *sdkChangesFollowerFactory) New(ctx context.Context, since string) (changesFollower, error) {
+	postChangesOptions := f.service.NewPostChangesOptions(f.dbName)
+	postChangesOptions.SetSince(since)
+	postChangesOptions.SetIncludeDocs(false)
+	postChangesOptions.SetSeqInterval(changesFeedSeqInterval)
+
+	follower, err := features.NewChangesFollowerWithContext(ctx, f.service, postChangesOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	changesCh, err := follower.StartOneOff()
+	if err != nil {
+		return nil, err
+	}
+
+	return &sdkChangesFollower{changesCh: changesCh}, nil
+}
+
+type sdkChangesFollower struct {
+	changesCh <-chan features.ChangesItem
+}
+
+func (f *sdkChangesFollower) Next() (cloudantv1.ChangesResultItem, error) {
+	changesItem, ok := <-f.changesCh
+	if !ok {
+		return cloudantv1.ChangesResultItem{}, io.EOF
+	}
+
+	return changesItem.Item()
 }

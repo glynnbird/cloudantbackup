@@ -1,47 +1,17 @@
 package backup
 
 import (
+	"context"
 	"io"
 
 	"github.com/IBM/cloudant-go-sdk/cloudantv1"
 	"github.com/IBM/go-sdk-core/v5/core"
 )
 
-type fakeChangesResponse struct {
-	stream io.ReadCloser
-	err    error
-}
-
 type fakeCloudantService struct {
-	changesStream    io.ReadCloser
-	changesErr       error
-	changesResponses []fakeChangesResponse
-	changesCalls     int
-	lastChangesSince []string
-	bulkGetResult    *cloudantv1.BulkGetResult
-	bulkGetErr       error
-	lastBulkDocs     []cloudantv1.BulkGetQueryDocument
-}
-
-func (f *fakeCloudantService) PostChangesAsStream(opts *cloudantv1.PostChangesOptions) (io.ReadCloser, *core.DetailedResponse, error) {
-	if opts != nil && opts.Since != nil {
-		f.lastChangesSince = append(f.lastChangesSince, *opts.Since)
-	} else {
-		f.lastChangesSince = append(f.lastChangesSince, "")
-	}
-
-	if f.changesCalls < len(f.changesResponses) {
-		response := f.changesResponses[f.changesCalls]
-		f.changesCalls++
-		return response.stream, nil, response.err
-	}
-
-	f.changesCalls++
-	return f.changesStream, nil, f.changesErr
-}
-
-func (f *fakeCloudantService) NewPostChangesOptions(db string) *cloudantv1.PostChangesOptions {
-	return (&cloudantv1.CloudantV1{}).NewPostChangesOptions(db)
+	bulkGetResult *cloudantv1.BulkGetResult
+	bulkGetErr    error
+	lastBulkDocs  []cloudantv1.BulkGetQueryDocument
 }
 
 func (f *fakeCloudantService) NewPostBulkGetOptions(db string, docs []cloudantv1.BulkGetQueryDocument) *cloudantv1.PostBulkGetOptions {
@@ -51,6 +21,43 @@ func (f *fakeCloudantService) NewPostBulkGetOptions(db string, docs []cloudantv1
 
 func (f *fakeCloudantService) PostBulkGet(*cloudantv1.PostBulkGetOptions) (*cloudantv1.BulkGetResult, *core.DetailedResponse, error) {
 	return f.bulkGetResult, nil, f.bulkGetErr
+}
+
+type fakeChangesFollowerFactory struct {
+	sinceCalls []string
+	followers  []fakeChangesFollowerResult
+}
+
+type fakeChangesFollowerResult struct {
+	follower changesFollower
+	err      error
+}
+
+func (f *fakeChangesFollowerFactory) New(_ context.Context, since string) (changesFollower, error) {
+	f.sinceCalls = append(f.sinceCalls, since)
+	callIndex := len(f.sinceCalls) - 1
+	if callIndex < len(f.followers) {
+		return f.followers[callIndex].follower, f.followers[callIndex].err
+	}
+	return nil, io.EOF
+}
+
+type fakeChangesFollower struct {
+	changes []cloudantv1.ChangesResultItem
+	err     error
+	index   int
+}
+
+func (f *fakeChangesFollower) Next() (cloudantv1.ChangesResultItem, error) {
+	if f.index < len(f.changes) {
+		change := f.changes[f.index]
+		f.index++
+		return change, nil
+	}
+	if f.err != nil {
+		return cloudantv1.ChangesResultItem{}, f.err
+	}
+	return cloudantv1.ChangesResultItem{}, io.EOF
 }
 
 type fakeOutputWriter struct {
