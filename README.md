@@ -114,6 +114,91 @@ To remind myself of what's going on, this diagram helps:
 
 ![diagram](cloudantbackup.png)
 
+### Backup Execution Flow
+
+When a backup is triggered, the following sequence of function calls occurs:
+
+#### 1. Initialization (`backup.go`)
+- **`New()`** - Creates a new CloudantBackup instance with default dependencies
+  - Loads configuration via `NewAppConfig()` (from `appconfig.go`)
+  - Sets up Cloudant SDK client
+  - Calls `NewWithDeps()` to initialize the backup structure
+
+#### 2. Main Execution (`backup.go`)
+- **`Run(ctx)`** - Main orchestration function
+  - Creates cancellable context for coordinated shutdown
+  - Calls `loadResumeBatches()` to check for resume mode (from `resume.go`)
+  - Calls `startWorkers()` to launch worker goroutines (from `workers.go`)
+  - Calls `produceBatches()` to either resume or start fresh (from `resume.go`)
+  - Calls `shutdownWorkers()` to clean up (from `workers.go`)
+  - Calls `closeResources()` to flush and close files
+
+#### 3. Batch Production (Normal Mode)
+- **`produceBatches()`** (`resume.go`) - Decides between resume or fresh backup
+- **`SpoolChangesFeed()`** (`backup.go`) - Coordinates changes feed processing
+  - Calls `followChangesFeed()` (from `changes_follower.go`)
+  - Logs completion and writes to log file
+
+#### 4. Changes Feed Processing (`changes_follower.go`)
+- **`followChangesFeed()`** - Consumes the changes feed
+  - Creates changes follower via `changesFollowerFactory.New()`
+  - For each change:
+    - Calls `queueChange()` to buffer document IDs
+    - When buffer is full, calls `dispatchBatchToWorker()`
+  - On EOF, flushes remaining buffer via `dispatchBatchToWorker()`
+
+- **`queueChange()`** - Adds document ID to buffer
+  - Calls `dispatchBatchToWorker()` when buffer reaches capacity
+
+- **`dispatchBatchToWorker()`** - Creates and sends batch to workers
+  - Creates `Batch` via `NewBatch()` (from `batch.go`)
+  - Writes to log file if enabled
+  - Sends batch to `jobsChan` for worker processing
+
+#### 5. Worker Goroutines (`workers.go`)
+Multiple workers run concurrently, each executing:
+
+- **`fetchDocsWorker()`** - Main worker loop
+  - Calls `receiveJob()` to get next batch from `jobsChan`
+  - Calls `processBatch()` to fetch and process documents
+  - Calls `sendResult()` to send results to `resultsChan`
+
+- **`processBatch()`** - Processes a single batch
+  - Calls `fetchBulkDocs()` to make API call
+  - Calls `extractDocuments()` to separate successful docs from errors
+  - Marshals documents to JSON
+
+- **`fetchBulkDocs()`** - Makes bulk get API call to Cloudant
+
+- **`extractDocuments()`** - Processes bulk get results
+
+#### 6. Results Collection (`workers.go`)
+A single collector goroutine runs:
+
+- **`statsCollector()`** - Collects and writes results
+  - Writes backup header via `output.WriteHeader()` (from `output.go`)
+  - For each result from `resultsChan`:
+    - Writes batch to output via `output.WriteResult()`
+    - Updates log file via `logFile.WriteDoneBatch()` (from `logfile.go`)
+    - Logs progress to stderr
+
+#### 7. Resume Mode (`resume.go`)
+If `--resume` flag is set:
+
+- **`loadResumeBatches()`** - Loads pending batches from log file
+  - Calls `logFile.Load()` (from `logfile.go`)
+
+- **`resumeBatches()`** - Re-enqueues pending batches
+  - Sends each batch to `jobsChan` for processing
+
+### Key Design Patterns
+
+- **Producer-Consumer**: Changes feed produces batches, workers consume them
+- **Fan-Out**: Multiple workers process batches in parallel
+- **Fan-In**: Single collector aggregates results
+- **Context Cancellation**: Coordinated shutdown on errors or completion
+- **Buffering**: Document IDs are batched before fetching to optimize API calls
+
 ## Differences from couchbackup
 
 - the goroutines that fetch the batches of documents execute in parallel, allowing the backup to proceed more quickly.
