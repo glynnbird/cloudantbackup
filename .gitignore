@@ -4,3 +4,4 @@ cloudantbackup
 *.txt
 *.log
 run.sh
+coverage.out
