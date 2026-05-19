@@ -30,64 +30,97 @@ func (cb *CloudantBackup) shutdownWorkers() {
 // fetchDocsWorker reads batches from jobsChan, fetches the documents from
 // Cloudant, and sends ResultSet values to resultsChan.
 func (cb *CloudantBackup) fetchDocsWorker(ctx context.Context, cancel context.CancelFunc) {
-	// make sure we release our slot in the WaitGroup
 	defer cb.wgWorker.Done()
 
 	for {
-		var job Batch
-		var ok bool
-
-		select {
-		case <-ctx.Done():
+		job, ok := cb.receiveJob(ctx)
+		if !ok {
 			return
-		case job, ok = <-cb.jobsChan:
-			if !ok {
-				return
-			}
 		}
 
-		// formulate bulk docs request
-		postBulkGetOptions := cb.service.NewPostBulkGetOptions(cb.appConfig.DatabaseName, job.docs)
-		if cb.appConfig.Mode == ModeFull {
-			postBulkGetOptions.SetRevs(true)
-		}
-		bulkGetResult, _, err := cb.service.PostBulkGet(postBulkGetOptions)
+		resultSet, err := cb.processBatch(job)
 		if err != nil {
 			cb.cancelWithError(cancel, err)
 			return
 		}
-		backupDocs := make([]cloudantv1.Document, 0, len(job.docs))
-		docCount := 0
-		errCount := 0
-		for _, result := range bulkGetResult.Results {
-			for _, doc := range result.Docs {
-				if doc.Error == nil {
-					backupDocs = append(backupDocs, *doc.Ok)
-					docCount++
-				} else {
-					errCount++
-				}
+
+		if !cb.sendResult(ctx, resultSet) {
+			return
+		}
+	}
+}
+
+// receiveJob waits for the next batch job or context cancellation.
+// Returns false if the worker should exit.
+func (cb *CloudantBackup) receiveJob(ctx context.Context) (Batch, bool) {
+	select {
+	case <-ctx.Done():
+		return Batch{}, false
+	case job, ok := <-cb.jobsChan:
+		return job, ok
+	}
+}
+
+// processBatch fetches documents for a batch and returns the result set.
+func (cb *CloudantBackup) processBatch(job Batch) (ResultSet, error) {
+	bulkGetResult, err := cb.fetchBulkDocs(job)
+	if err != nil {
+		return ResultSet{}, err
+	}
+
+	backupDocs, docCount, errCount := cb.extractDocuments(bulkGetResult)
+
+	jsonBytes, err := json.Marshal(backupDocs)
+	if err != nil {
+		return ResultSet{}, err
+	}
+
+	return ResultSet{
+		result:   jsonBytes,
+		docCount: docCount,
+		errCount: errCount,
+		batchID:  job.batchID,
+	}, nil
+}
+
+// fetchBulkDocs performs the bulk get API call for a batch of documents.
+func (cb *CloudantBackup) fetchBulkDocs(job Batch) (*cloudantv1.BulkGetResult, error) {
+	options := cb.service.NewPostBulkGetOptions(cb.appConfig.DatabaseName, job.docs)
+	if cb.appConfig.Mode == ModeFull {
+		options.SetRevs(true)
+	}
+	bulkGetResult, _, err := cb.service.PostBulkGet(options)
+	return bulkGetResult, err
+}
+
+// extractDocuments processes bulk get results and separates successful docs from errors.
+func (cb *CloudantBackup) extractDocuments(bulkGetResult *cloudantv1.BulkGetResult) ([]cloudantv1.Document, int, int) {
+	backupDocs := make([]cloudantv1.Document, 0, len(bulkGetResult.Results))
+	docCount := 0
+	errCount := 0
+
+	for _, result := range bulkGetResult.Results {
+		for _, doc := range result.Docs {
+			if doc.Error == nil {
+				backupDocs = append(backupDocs, *doc.Ok)
+				docCount++
+			} else {
+				errCount++
 			}
 		}
+	}
 
-		// send results back to resultsChan as marshalled JSON bytes together
-		// with the number of documents fetched
-		b, err := json.Marshal(backupDocs)
-		if err != nil {
-			cb.cancelWithError(cancel, err)
-			return
-		}
-		rs := ResultSet{
-			result:   b,
-			docCount: docCount,
-			errCount: errCount,
-			batchID:  job.batchID,
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case cb.resultsChan <- rs:
-		}
+	return backupDocs, docCount, errCount
+}
+
+// sendResult sends a result set to the results channel, respecting context cancellation.
+// Returns false if the worker should exit.
+func (cb *CloudantBackup) sendResult(ctx context.Context, rs ResultSet) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case cb.resultsChan <- rs:
+		return true
 	}
 }
 
