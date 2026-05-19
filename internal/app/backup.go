@@ -108,14 +108,6 @@ func (cb *CloudantBackup) SpoolChangesFeed(ctx context.Context) (string, error) 
 		return since, err
 	}
 
-	// if there are still unprocessed changes in the buffer
-	if cb.bufferLen > 0 {
-		// send them to be processed
-		if err := cb.dispatchBatchToWorker(ctx); err != nil {
-			return since, err
-		}
-	}
-
 	// we're now finished consuming the changes feed
 	log.Printf("Changes follower complete. %d changes\n", cb.changesCount)
 	if cb.logFile != nil {

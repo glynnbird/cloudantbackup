@@ -83,6 +83,12 @@ func (cb *CloudantBackup) followChangesFeed(ctx context.Context, since string) (
 		change, err := follower.Next()
 		if err != nil {
 			if err == io.EOF {
+				// Dispatch any remaining buffered changes before returning
+				if cb.bufferLen > 0 {
+					if err := cb.dispatchBatchToWorker(ctx); err != nil {
+						return currentSince, err
+					}
+				}
 				return currentSince, nil
 			}
 			return currentSince, err
