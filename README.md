@@ -110,9 +110,37 @@ A progress log is written to stderr:
 
 ## How does it work?
 
-To remind myself of what's going on, this diagram helps:
+```mermaid
+flowchart TD
+    CF["Changes Follower\n(changes_follower.go)"]
+    RM["Resume Loader\n(resume.go)"]
+    JC[/"jobsChan\n(chan Batch)"/]
+    W1["fetchDocsWorker 1\n(workers.go)"]
+    W2["fetchDocsWorker 2\n(workers.go)"]
+    WN["fetchDocsWorker N\n(workers.go)"]
+    RC[/"resultsChan\n(chan ResultSet)"/]
+    SC["statsCollector\n(workers.go)"]
+    CL["Cloudant API\n(_bulk_get)"]
+    LF[("LogFile\n(logfile.go)")]
+    OUT["stdout\n(output.go)"]
 
-![diagram](cloudantbackup.png)
+    CF -->|"Batch (doc IDs)"| JC
+    RM -->|"Batch (doc IDs)"| JC
+    JC --> W1
+    JC --> W2
+    JC --> WN
+    W1 <-->|"fetch docs"| CL
+    W2 <-->|"fetch docs"| CL
+    WN <-->|"fetch docs"| CL
+    W1 -->|ResultSet| RC
+    W2 -->|ResultSet| RC
+    WN -->|ResultSet| RC
+    RC --> SC
+    CF -->|"WriteNewBatch"| LF
+    RM -->|"WriteNewBatch"| LF
+    SC -->|"WriteDoneBatch"| LF
+    SC -->|"WriteResult"| OUT
+```
 
 ### Backup Execution Flow
 
